@@ -1,0 +1,6 @@
+numpy==1.26.4
+pandas==2.2.2
+matplotlib==3.8.4
+PySide6==6.7.0
+pyqtgraph==0.13.7
+brainflow==5.16.0
