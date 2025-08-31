@@ -1,6 +1,16 @@
-numpy==1.26.4
-pandas==2.2.2
-matplotlib==3.8.4
-PySide6==6.7.0
-pyqtgraph==0.13.7
-brainflow==5.16.0
+# Core GUI Framework
+PySide6>=6.5.0
+
+# EEG Data Acquisition
+brainflow>=5.18.0
+
+# Data Processing and Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+matplotlib>=3.7.0
+pyqtgraph>=0.13.0
+
+# Additional Utilities
+pathlib2>=2.3.7; python_version < "3.4"
