@@ -7,6 +7,7 @@ Main application entry point
 import sys
 import os
 from pathlib import Path
+from typing import Dict, Any
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPalette, QColor
@@ -108,8 +109,8 @@ class MusePyApp(QMainWindow):
         nav_layout.setContentsMargins(15, 10, 15, 10)
         nav_layout.setSpacing(10)
         
-        self.data_collection_btn = self.create_nav_toggle_button("📊 Data Collection", True)
-        self.data_analysis_btn = self.create_nav_toggle_button("📈 Data Analysis", False)
+        self.data_collection_btn = self.create_nav_toggle_button("📈 Data Collection", True)
+        self.data_analysis_btn = self.create_nav_toggle_button("📊 Data Analysis", False)
         
         nav_layout.addWidget(self.data_collection_btn)
         nav_layout.addWidget(self.data_analysis_btn)
@@ -278,27 +279,77 @@ class MusePyApp(QMainWindow):
                 if item.widget():
                     item.widget().setParent(None)
             
-            # Add data analysis controls (empty for now)
+            # Create data analysis control panel with all widgets
             if not self.data_analysis_control_panel:
                 self.data_analysis_control_panel = QWidget()
                 analysis_layout = QVBoxLayout(self.data_analysis_control_panel)
-                analysis_layout.setContentsMargins(15, 15, 15, 15)
-                analysis_layout.setSpacing(15)
+                analysis_layout.setContentsMargins(0, 0, 0, 0)
+                analysis_layout.setSpacing(0)
                 
-                # Placeholder for data analysis controls
-                placeholder = QLabel("Data Analysis Controls\n(Coming Soon)")
-                placeholder.setStyleSheet("""
-                    QLabel {
-                        color: #6c757d;
-                        font-style: italic;
-                        text-align: center;
-                        padding: 20px;
-                    }
-                """)
-                analysis_layout.addWidget(placeholder)
-                analysis_layout.addStretch()
+                # Import the widgets
+                from src.data_analysis.data_analysis_widget import (
+                    InputDataWidget, ProcessingWidget, VisualizationWidget, VariableInspectorWidget
+                )
+                
+                # Create InputDataWidget
+                self.input_data_widget = InputDataWidget(parent=self)
+                analysis_layout.addWidget(self.input_data_widget)
+                
+                # Create ProcessingWidget
+                self.processing_widget = ProcessingWidget(parent=self)
+                analysis_layout.addWidget(self.processing_widget)
+                
+                # Create VisualizationWidget
+                self.visualization_widget = VisualizationWidget(parent=self)
+                analysis_layout.addWidget(self.visualization_widget)
+                
+                # Create Variable Inspector (at the bottom)
+                self.variable_inspector = VariableInspectorWidget(parent=self)
+                analysis_layout.addWidget(self.variable_inspector)
+                
+                # Connect signals
+                self.input_data_widget.file_loaded.connect(self.on_data_file_loaded)
+                self.input_data_widget.file_deleted.connect(self.on_data_file_deleted)
             
             self.control_panel.layout().addWidget(self.data_analysis_control_panel)
+    
+    def on_data_file_loaded(self, file_id: str, file_path: str):
+        """Handle data file loaded event"""
+        # Update the variable inspector with current data
+        if hasattr(self, 'variable_inspector'):
+            data_dict = self.get_combined_data_dict()
+            self.variable_inspector.update_data(data_dict)
+            
+    def on_data_file_deleted(self, file_id: str):
+        """Handle data file deleted event"""
+        # Update the variable inspector with current data
+        if hasattr(self, 'variable_inspector'):
+            data_dict = self.get_combined_data_dict()
+            self.variable_inspector.update_data(data_dict)
+            
+
+            
+    def get_combined_data_dict(self) -> Dict[str, Any]:
+        """Get combined data dictionary with input, processing, and visualization data"""
+        combined_dict = {
+            "input": {},
+            "processing": {},
+            "visualization": {}
+        }
+        
+        # Add input data
+        if hasattr(self, 'input_data_widget'):
+            combined_dict["input"] = self.input_data_widget.get_data_dict()
+            
+        # Add processing results
+        if hasattr(self, 'processing_results') and self.processing_results:
+            combined_dict["processing"] = self.processing_results
+            
+        # Add visualization results
+        if hasattr(self, 'visualization_results') and self.visualization_results:
+            combined_dict["visualization"] = self.visualization_results
+            
+        return combined_dict
     
     def setup_theme(self):
         """Setup light theme for the application"""

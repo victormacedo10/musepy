@@ -25,7 +25,7 @@ class MetadataWidget(QWidget):
         layout.setSpacing(5)
         
         # Title
-        title = QLabel("Data Info:")
+        title = QLabel("Recording Info:")
         title.setStyleSheet("font-weight: bold; color: #495057; background-color: white; border-right: none;")
         layout.addWidget(title)
         
@@ -122,7 +122,7 @@ class ViewRecordingWidget(QGroupBox):
     view_recording_requested = Signal(str)  # emits file path
     
     def __init__(self, parent=None):
-        super().__init__("🪪 View Recording")
+        super().__init__("🖹 View Recording")
         self.parent = parent
         self.current_file_path = ""
         
@@ -137,7 +137,7 @@ class ViewRecordingWidget(QGroupBox):
         
         # Data file selection
         file_layout = QHBoxLayout()
-        file_label = QLabel("Data File:")
+        file_label = QLabel("File Path:")
         file_label.setStyleSheet("background-color: white; color: #495057; border-right: none;")
         file_layout.addWidget(file_label)
         
