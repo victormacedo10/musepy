@@ -2,27 +2,17 @@
 Data Collection Widget - Main interface for EEG data acquisition
 """
 
-import sys
-import os
 import pickle
 import time
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, Any, Optional
 
 import pandas as pd
 import numpy as np
-import pyqtgraph as pg
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QPushButton, QLineEdit, 
-    QLabel, QComboBox, QSpinBox, QCheckBox, QTextEdit, QFileDialog, 
-    QMessageBox, QScrollArea, QFrame, QSizePolicy
-)
-from PySide6.QtCore import Qt, QTimer, Signal, QThread, QObject
-from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
+from PySide6.QtCore import QTimer
 
 # BrainFlow imports
-from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds, BrainFlowPresets
+from brainflow.board_shim import BrainFlowPresets
 
 # Local imports
 from .connect_device_widget import ConnectDeviceWidget

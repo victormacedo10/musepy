@@ -5,17 +5,25 @@ Main application entry point
 """
 
 import sys
-import os
 from pathlib import Path
 from typing import Dict, Any
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPalette, QColor
-
+import matplotlib as mpl
+import matplotlib
+matplotlib.use("Qt5Agg")              # match the working script
+import matplotlib as mpl
+mpl.rcParams.update({
+    "figure.dpi": 120,                # logical DPI only (QtAgg will upscale for HiDPI)
+    "path.snap": True,                # crisper ticks/spines on fractional scales
+    "axes.linewidth": 0.8,
+    "xtick.major.width": 0.8,
+    "ytick.major.width": 0.8,
+})
 # Import our custom modules
 from src.data_collection.data_collection_widget import DataCollectionWidget
-from src.data_analysis.data_analysis_widget import DataAnalysisWidget
-
+from src.data_analysis.data_analysis_widget import (DataAnalysisWidget, InputDataWidget, ProcessingWidget, 
+                                                    VisualizationWidget, VariableInspectorWidget, SessionManagementWidget)
 
 class MusePyApp(QMainWindow):
     """Main application window for MusePy"""
@@ -64,7 +72,6 @@ class MusePyApp(QMainWindow):
         
     def create_left_panel(self):
         """Create the left panel with navigation and controls"""
-        from PySide6.QtWidgets import QVBoxLayout
         
         left_frame = QFrame()
         left_frame.setFixedWidth(400)
@@ -286,11 +293,6 @@ class MusePyApp(QMainWindow):
                 analysis_layout.setContentsMargins(0, 0, 0, 0)
                 analysis_layout.setSpacing(0)
                 
-                # Import the widgets
-                from src.data_analysis.data_analysis_widget import (
-                    InputDataWidget, ProcessingWidget, VisualizationWidget, VariableInspectorWidget
-                )
-                
                 # Create InputDataWidget
                 self.input_data_widget = InputDataWidget(parent=self)
                 analysis_layout.addWidget(self.input_data_widget)
@@ -303,13 +305,18 @@ class MusePyApp(QMainWindow):
                 self.visualization_widget = VisualizationWidget(parent=self)
                 analysis_layout.addWidget(self.visualization_widget)
                 
-                # Create Variable Inspector (at the bottom)
+                # Create Variable Inspector
                 self.variable_inspector = VariableInspectorWidget(parent=self)
                 analysis_layout.addWidget(self.variable_inspector)
+                
+                # Create Session Management (at the bottom)
+                self.session_management_widget = SessionManagementWidget(parent=self)
+                analysis_layout.addWidget(self.session_management_widget)
                 
                 # Connect signals
                 self.input_data_widget.file_loaded.connect(self.on_data_file_loaded)
                 self.input_data_widget.file_deleted.connect(self.on_data_file_deleted)
+                self.visualization_widget.view_output_executed.connect(self.on_visualization_executed)
             
             self.control_panel.layout().addWidget(self.data_analysis_control_panel)
     
@@ -326,6 +333,12 @@ class MusePyApp(QMainWindow):
         if hasattr(self, 'variable_inspector'):
             data_dict = self.get_combined_data_dict()
             self.variable_inspector.update_data(data_dict)
+            
+    def on_visualization_executed(self, script_id: str):
+        """Handle visualization execution event"""
+        # Update the data analysis widget with new visualization data
+        if hasattr(self, 'data_analysis_widget'):
+            self.data_analysis_widget.update_visualization_data(self.visualization_results)
             
 
             

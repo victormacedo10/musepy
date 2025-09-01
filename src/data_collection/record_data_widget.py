@@ -2,17 +2,15 @@
 Record Data Widget - Handles data recording controls
 """
 
-import os
 import pickle
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, 
     QLabel, QTextEdit, QFileDialog, QMessageBox
 )
 import pandas as pd
-from PySide6.QtCore import Signal, QTimer, Qt
-from PySide6.QtGui import QFont, QPalette, QColor
+from PySide6.QtCore import Signal, QTimer
 
 
 class RecordDataWidget(QGroupBox):

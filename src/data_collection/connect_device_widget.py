@@ -3,7 +3,7 @@ Connect Device Widget - Handles device selection and connection
 """
 
 from PySide6.QtWidgets import (
-    QGroupBox, QSizePolicy, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel
+    QGroupBox, QSizePolicy, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel, QMessageBox
 )
 from PySide6.QtCore import Signal, QThread
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
@@ -105,7 +105,6 @@ class ConnectDeviceWidget(QGroupBox):
                 border-radius: 4px;
                 padding: 5px;
                 color: #495057;
-                min-width: 50px;
             }
             QComboBox:focus {
                 border-color: #007bff;
@@ -222,7 +221,6 @@ class ConnectDeviceWidget(QGroupBox):
         
     def on_connection_failure(self, exception):
         """Handle connection failure"""
-        from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(self, "Connection Failed", 
                            f"Failed to connect to device:\n{str(exception)}")
         

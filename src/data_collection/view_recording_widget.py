@@ -2,7 +2,6 @@
 View Recording Widget - Handles viewing recorded data and metadata
 """
 
-import pickle
 from pathlib import Path
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, 

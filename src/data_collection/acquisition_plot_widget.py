@@ -8,7 +8,6 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QSpinBox
 )
-from PySide6.QtCore import Qt
 
 
 class AcquisitionPlotWidget(QWidget):

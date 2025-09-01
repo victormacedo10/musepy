@@ -35,7 +35,6 @@ def plot_eeg_psd_data(eeg_data):
     freqs = eeg_data['psd_freq']
     for marker, psd in eeg_data['psd_data'].items():
         ax.plot(freqs, psd, label=marker)
-    ax.set_title('EEG PSD Spectrum')
     ax.set_xlabel('Frequency (Hz)')
     ax.set_ylabel('PSD (µV²/Hz)')
     ax.legend()

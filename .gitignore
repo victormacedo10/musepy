@@ -209,5 +209,8 @@ __marimo__/
 # Data files
 data/
 
+# Session files
+sessions/
+
 # VSCode
 .vscode/
