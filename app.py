@@ -447,8 +447,8 @@ def main():
     """Main application entry point"""
     app = QApplication(sys.argv)
     
-    # Hardcode demo mode to True for testing
-    demo_mode = True
+    # Get demo mode from command line flag
+    demo_mode = "--demo" in sys.argv
     
     # Create and show main window
     window = MusePyApp(demo_mode=demo_mode)

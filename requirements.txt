@@ -1,16 +1,11 @@
-# Core GUI Framework
-PySide6>=6.5.0
-
-# EEG Data Acquisition
-brainflow>=5.18.0
-
 # Data Processing and Analysis
-pandas>=2.0.0
-numpy>=1.24.0
-
+numpy==2.3.2
+pandas==2.3.2
+scipy==1.16.1
+# Core GUI Framework
+PySide6==6.9.2
 # Visualization
-matplotlib>=3.7.0
-pyqtgraph>=0.13.0
-
-# Additional Utilities
-pathlib2>=2.3.7; python_version < "3.4"
+matplotlib==3.10.5
+pyqtgraph==0.13.7
+# EEG Data Acquisition
+brainflow==5.18.1
