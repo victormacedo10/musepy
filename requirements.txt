@@ -1,0 +1,11 @@
+# Data Processing and Analysis
+numpy==2.3.2
+pandas==2.3.2
+scipy==1.16.1
+# Core GUI Framework
+PySide6==6.9.2
+# Visualization
+matplotlib==3.10.5
+pyqtgraph==0.13.7
+# EEG Data Acquisition
+brainflow==5.18.1
