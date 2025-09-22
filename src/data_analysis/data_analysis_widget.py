@@ -22,6 +22,10 @@ from PySide6.QtGui import QAction
 
 
 class ResponsiveCanvas(FigureCanvas):
+    def __init__(self, fig, parent=None):
+        super().__init__(fig)
+        self.parent_widget = parent
+        
     def resizeEvent(self, event):
         fig = self.figure
         dpi = fig.get_dpi()                     # logical DPI
@@ -31,6 +35,14 @@ class ResponsiveCanvas(FigureCanvas):
             abs(fig.get_figheight() - h_in) > 1e-2):
             fig.set_size_inches(w_in, h_in, forward=True)
         super().resizeEvent(event)
+        
+        # Trigger comprehensive plot resize if parent widget supports it
+        if self.parent_widget and hasattr(self.parent_widget, 'resize_plot_to_fit_area'):
+            # Find the widget that contains this canvas
+            for child in self.parent_widget.findChildren(QWidget):
+                if hasattr(child, 'canvas') and child.canvas == self:
+                    self.parent_widget.resize_plot_to_fit_area(child)
+                    break
 
 
 
@@ -49,13 +61,22 @@ class ResponsiveContentArea(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_widget = parent
+        self.data_analysis_widget = None
+        
+    def set_data_analysis_widget(self, data_analysis_widget):
+        """Set reference to the DataAnalysisWidget for proper resize handling"""
+        self.data_analysis_widget = data_analysis_widget
         
     def resizeEvent(self, event):
         """Handle resize events to adjust plot sizes"""
         super().resizeEvent(event)
-        # Call the parent's resize method if it exists
-        if hasattr(self.parent_widget, 'resize_plot_to_fit_area'):
-            self.parent_widget.resize_plot_to_fit_area(self)
+        # Call the DataAnalysisWidget's resize method if available
+        if self.data_analysis_widget and hasattr(self.data_analysis_widget, 'resize_plot_to_fit_area'):
+            # Find the widget that contains this content area
+            for child in self.data_analysis_widget.findChildren(QWidget):
+                if hasattr(child, 'content_area') and child.content_area == self:
+                    self.data_analysis_widget.resize_plot_to_fit_area(child)
+                    break
 
 
 class VariableInspectorWidget(QWidget):
@@ -1331,6 +1352,12 @@ class DataAnalysisWidget(QWidget):
         
         self.setup_ui()
         
+    def resizeEvent(self, event):
+        """Handle widget resize events to update all plots"""
+        super().resizeEvent(event)
+        # Use a timer to delay the resize to avoid conflicts during layout
+        QTimer.singleShot(50, self.resize_all_plots)
+        
     def setup_ui(self):
         """Setup the user interface with 2x2 grid layout"""
         layout = QVBoxLayout(self)
@@ -1392,10 +1419,10 @@ class DataAnalysisWidget(QWidget):
         dropdown_layout = QHBoxLayout()
         dropdown_layout.setSpacing(5)
         
-        # First dropdown (Plot/Table) - fixed width
+        # First dropdown (Plot/Table) - fixed width with 30/70 proportion
         type_combo = QComboBox()
         type_combo.addItems(["Plot", "Table"])
-        type_combo.setFixedWidth(50)
+        type_combo.setFixedWidth(60)  # Smaller width to maintain 30/70 proportion
         type_combo.setStyleSheet("""
             QComboBox {
                 background-color: white;
@@ -1457,6 +1484,7 @@ class DataAnalysisWidget(QWidget):
         
         # Create content display area
         content_area = ResponsiveContentArea(widget)
+        content_area.set_data_analysis_widget(self)  # Set reference to DataAnalysisWidget
         content_area.setStyleSheet("""
             QWidget {
                 background-color: white;
@@ -1667,6 +1695,10 @@ class DataAnalysisWidget(QWidget):
         try:
             fig = self.parent.visualization_results["plots"][plot_name]
 
+            # Clear any previous font size storage to ensure fresh scaling
+            if hasattr(fig, '_original_font_sizes'):
+                delattr(fig, '_original_font_sizes')
+
             # prefer constrained layout; fallback if older MPL
             try:
                 fig.set_layout_engine('constrained')
@@ -1684,7 +1716,7 @@ class DataAnalysisWidget(QWidget):
                 widget.canvas.deleteLater()
 
             # create canvas *then* size by resizeEvent
-            widget.canvas = ResponsiveCanvas(fig)
+            widget.canvas = ResponsiveCanvas(fig, self)  # Pass DataAnalysisWidget as parent
             widget.canvas.setContentsMargins(0, 0, 0, 0)
             widget.canvas_layout.setContentsMargins(0, 0, 0, 0)
             widget.canvas_layout.setSpacing(0)
@@ -1707,10 +1739,15 @@ class DataAnalysisWidget(QWidget):
                 pass
             widget.save_button.clicked.connect(lambda: self.save_figure(fig, widget.dpi_input.value()))
 
-            # ---- change 2: first draw + two-stage resize after layout settles ----
+            # Ensure proper initial sizing and layout
             widget.canvas.draw_idle()
-            QTimer.singleShot(0,  lambda: self.resize_plot_to_fit_area(widget))
-            QTimer.singleShot(60, lambda: self.resize_plot_to_fit_area(widget))
+            
+            # Force immediate resize to fit the current container size
+            self.resize_plot_to_fit_area(widget)
+            
+            # Additional delayed resize to handle any layout changes
+            QTimer.singleShot(10, lambda: self.resize_plot_to_fit_area(widget))
+            QTimer.singleShot(100, lambda: self.resize_plot_to_fit_area(widget))
 
         except Exception as e:
             err = QLabel(f"Error displaying plot: {e}")
@@ -1879,30 +1916,156 @@ class DataAnalysisWidget(QWidget):
         # This method is now handled directly in the main window
         pass
     
-    def _scale_figure_style(self, fig, target_px, base_px=1000, min_scale=0.85, max_scale=1.35, alpha=0.65):
-        # sub-linear, clamped scaling so text doesn't get tiny
+    def _get_screen_dpi_factor(self):
+        """Get DPI scaling factor for the current screen"""
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                screen = app.primaryScreen()
+                if screen:
+                    # Get logical DPI and physical DPI
+                    logical_dpi = screen.logicalDotsPerInch()
+                    physical_dpi = screen.physicalDotsPerInch()
+                    # Calculate scaling factor (typically 1.0, 1.25, 1.5, 2.0 for Windows)
+                    dpi_factor = logical_dpi / 96.0  # 96 is standard Windows DPI
+                    return max(0.75, min(2.0, dpi_factor))  # Clamp between 0.75 and 2.0
+        except Exception:
+            pass
+        return 1.0  # Default fallback
+    
+    def _get_screen_size_category(self):
+        """Determine screen size category for appropriate scaling"""
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                screen = app.primaryScreen()
+                if screen:
+                    geometry = screen.availableGeometry()
+                    width = geometry.width()
+                    height = geometry.height()
+                    
+                    # Calculate diagonal size in inches (rough estimate)
+                    dpi = screen.logicalDotsPerInch()
+                    diag_pixels = (width**2 + height**2)**0.5
+                    diag_inches = diag_pixels / dpi
+                    
+                    if diag_inches < 15:
+                        return "small"  # Small laptops/tablets
+                    elif diag_inches < 20:
+                        return "medium"  # Standard laptops
+                    else:
+                        return "large"  # Desktop monitors
+        except Exception:
+            pass
+        return "medium"  # Default fallback
+    
+    def _store_original_font_sizes(self, fig):
+        """Store original font sizes to prevent cumulative scaling"""
+        if not hasattr(fig, '_original_font_sizes'):
+            fig._original_font_sizes = {}
+            
+        for i, ax in enumerate(fig.get_axes()):
+            ax_key = f"ax_{i}"
+            if ax_key not in fig._original_font_sizes:
+                fig._original_font_sizes[ax_key] = {}
+                
+                # Store original font sizes
+                if ax.title and ax.title.get_text():
+                    fig._original_font_sizes[ax_key]['title'] = ax.title.get_fontsize()
+                if ax.xaxis.label:
+                    fig._original_font_sizes[ax_key]['xlabel'] = ax.xaxis.label.get_fontsize()
+                if ax.yaxis.label:
+                    fig._original_font_sizes[ax_key]['ylabel'] = ax.yaxis.label.get_fontsize()
+                    
+                # Store tick label sizes
+                x_lbls = ax.xaxis.get_ticklabels()
+                y_lbls = ax.yaxis.get_ticklabels()
+                if x_lbls:
+                    fig._original_font_sizes[ax_key]['xtick'] = x_lbls[0].get_size()
+                if y_lbls:
+                    fig._original_font_sizes[ax_key]['ytick'] = y_lbls[0].get_size()
+                    
+                # Store legend font sizes
+                leg = ax.get_legend()
+                if leg is not None:
+                    fig._original_font_sizes[ax_key]['legend'] = []
+                    for txt in leg.get_texts():
+                        fig._original_font_sizes[ax_key]['legend'].append(txt.get_fontsize())
+                    if leg.get_title() is not None:
+                        fig._original_font_sizes[ax_key]['legend_title'] = leg.get_title().get_fontsize()
+
+    def _scale_figure_style(self, fig, target_px, base_px=None, min_scale=0.8, max_scale=1.4, alpha=0.7):
+        """Improved scaling that prevents cumulative scaling and adapts to screen size"""
+        # Store original font sizes on first call
+        self._store_original_font_sizes(fig)
+        
+        # Get screen DPI factor and size category
+        dpi_factor = self._get_screen_dpi_factor()
+        screen_category = self._get_screen_size_category()
+        
+        # Adjust base_px based on screen size and DPI
+        if base_px is None:
+            # Base pixel size should be adjusted for screen size
+            if screen_category == "small":
+                base_px = 500  # Small screens (15" laptops, etc.)
+            elif screen_category == "medium":
+                base_px = 700  # Medium screens (standard laptops)
+            else:
+                base_px = 1000  # Large screens (desktop monitors)
+                
+        # Apply DPI factor to base_px
+        base_px = base_px / dpi_factor
+        
+        # Adjust scaling parameters based on screen size
+        if screen_category == "small":
+            # More conservative scaling for small screens
+            alpha = 0.6
+            min_scale = 0.8
+            max_scale = 1.3
+        elif screen_category == "medium":
+            # Balanced scaling for medium screens
+            alpha = 0.7
+            min_scale = 0.8
+            max_scale = 1.4
+        else:
+            # More aggressive scaling for large screens
+            alpha = 0.8
+            min_scale = 0.7
+            max_scale = 1.5
+        
+        # Calculate scaling factor
         raw = (max(1.0, float(target_px)) / float(base_px)) ** alpha
         s = max(min_scale, min(max_scale, raw))
 
-        for ax in fig.get_axes():
-            if ax.title and ax.title.get_text():
-                ax.title.set_fontsize(ax.title.get_fontsize() * s)
-            if ax.xaxis.label:
-                ax.xaxis.label.set_fontsize(ax.xaxis.label.get_fontsize() * s)
-            if ax.yaxis.label:
-                ax.yaxis.label.set_fontsize(ax.yaxis.label.get_fontsize() * s)
+        for i, ax in enumerate(fig.get_axes()):
+            ax_key = f"ax_{i}"
+            original_sizes = fig._original_font_sizes.get(ax_key, {})
+            
+            # Apply scaling to titles and labels
+            if 'title' in original_sizes:
+                ax.title.set_fontsize(original_sizes['title'] * s)
+            if 'xlabel' in original_sizes:
+                ax.xaxis.label.set_fontsize(original_sizes['xlabel'] * s)
+            if 'ylabel' in original_sizes:
+                ax.yaxis.label.set_fontsize(original_sizes['ylabel'] * s)
 
-            x_lbls = ax.xaxis.get_ticklabels()
-            y_lbls = ax.yaxis.get_ticklabels()
-            if x_lbls:
-                base = x_lbls[0].get_size()
-                ax.tick_params(axis='x', which='major', labelsize=max(7, base * s))
-                ax.tick_params(axis='x', which='minor', labelsize=max(7, 0.85 * base * s))
-            if y_lbls:
-                base = y_lbls[0].get_size()
-                ax.tick_params(axis='y', which='major', labelsize=max(7, base * s))
-                ax.tick_params(axis='y', which='minor', labelsize=max(7, 0.85 * base * s))
+            # Apply scaling to tick labels with minimum size protection
+            if 'xtick' in original_sizes:
+                # Adjust minimum size based on screen category
+                min_tick_size = 6 if screen_category == "small" else 8
+                new_size = max(min_tick_size, original_sizes['xtick'] * s)
+                ax.tick_params(axis='x', which='major', labelsize=new_size)
+                ax.tick_params(axis='x', which='minor', labelsize=max(4, new_size * 0.85))
+            if 'ytick' in original_sizes:
+                # Adjust minimum size based on screen category
+                min_tick_size = 6 if screen_category == "small" else 8
+                new_size = max(min_tick_size, original_sizes['ytick'] * s)
+                ax.tick_params(axis='y', which='major', labelsize=new_size)
+                ax.tick_params(axis='y', which='minor', labelsize=max(4, new_size * 0.85))
 
+            # Scale line properties
             for line in ax.lines:
                 lw = line.get_linewidth()
                 if lw is not None:
@@ -1911,27 +2074,73 @@ class DataAnalysisWidget(QWidget):
                 if ms is not None:
                     line.set_markersize(max(2.8, ms * s))
 
+            # Scale legend with minimum size protection
             leg = ax.get_legend()
-            if leg is not None:
-                for txt in leg.get_texts():
-                    txt.set_fontsize(txt.get_fontsize() * s)
-                if leg.get_title() is not None:
-                    leg.get_title().set_fontsize(leg.get_title().get_fontsize() * s)
+            if leg is not None and 'legend' in original_sizes:
+                legend_sizes = original_sizes['legend']
+                # Adjust minimum legend size based on screen category
+                min_legend_size = 7 if screen_category == "small" else 9
+                for j, txt in enumerate(leg.get_texts()):
+                    if j < len(legend_sizes):
+                        new_size = max(min_legend_size, legend_sizes[j] * s)
+                        txt.set_fontsize(new_size)
+                if 'legend_title' in original_sizes:
+                    min_title_size = 8 if screen_category == "small" else 10
+                    title_size = max(min_title_size, original_sizes['legend_title'] * s)
+                    leg.get_title().set_fontsize(title_size)
 
     def resize_plot_to_fit_area(self, widget):
+        """Resize plot to fit the available area with proper error handling"""
         if not getattr(widget, 'canvas', None):
             return
-        fig = widget.canvas.figure
-        W  = widget.canvas_container.width()
-        H  = widget.canvas_container.height()
-        if W <= 0 or H <= 0:
-            return
+        try:
+            fig = widget.canvas.figure
+            W  = widget.canvas_container.width()
+            H  = widget.canvas_container.height()
+            if W <= 0 or H <= 0:
+                return
 
-        dpi = fig.get_dpi()                 # keep logical dpi as-is
-        w_in = max(4.0, W / dpi)
-        h_in = max(3.0, H / dpi)
-        fig.set_size_inches(w_in, h_in, forward=True)
+            dpi = fig.get_dpi()                 # keep logical dpi as-is
+            w_in = max(4.0, W / dpi)
+            h_in = max(3.0, H / dpi)
+            fig.set_size_inches(w_in, h_in, forward=True)
 
-        # gentle style scaling (do NOT touch DPI)
-        self._scale_figure_style(fig, W, base_px=1000, min_scale=0.9, max_scale=1.3)
-        widget.canvas.draw_idle()
+            # Improved style scaling with screen-aware parameters
+            self._scale_figure_style(fig, W, base_px=None, min_scale=0.7, max_scale=1.5)
+            widget.canvas.draw_idle()
+        except Exception as e:
+            # Silently handle resize errors to prevent crashes
+            print(f"Resize error: {e}")
+    
+    def resize_all_plots(self):
+        """Resize all plots in all content areas"""
+        for child in self.findChildren(QWidget):
+            if hasattr(child, 'area_id') and hasattr(child, 'canvas') and child.canvas is not None:
+                self.resize_plot_to_fit_area(child)
+    
+    def debug_scaling_info(self):
+        """Debug method to print scaling information"""
+        dpi_factor = self._get_screen_dpi_factor()
+        screen_category = self._get_screen_size_category()
+        print(f"Screen DPI Factor: {dpi_factor}")
+        print(f"Screen Category: {screen_category}")
+        
+        # Find a plot to analyze
+        for child in self.findChildren(QWidget):
+            if hasattr(child, 'canvas') and child.canvas is not None:
+                W = child.canvas_container.width()
+                H = child.canvas_container.height()
+                print(f"Plot container size: {W}x{H}")
+                
+                if screen_category == "small":
+                    base_px = 500
+                elif screen_category == "medium":
+                    base_px = 700
+                else:
+                    base_px = 1000
+                    
+                adjusted_base = base_px / dpi_factor
+                raw = (max(1.0, float(W)) / float(adjusted_base)) ** 0.7
+                scale = max(0.8, min(1.4, raw))
+                print(f"Calculated scale factor: {scale}")
+                break

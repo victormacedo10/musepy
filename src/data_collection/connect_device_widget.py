@@ -73,6 +73,7 @@ class ConnectDeviceWidget(QGroupBox):
         self.device_combo = QComboBox()
         self.device_combo.addItem("Muse 2", BoardIds.MUSE_2_BOARD)
         self.device_combo.addItem("Muse S", BoardIds.MUSE_S_BOARD)
+        self.device_combo.setMinimumWidth(120)  # Ensure enough width for device names
         device_layout.addWidget(self.device_combo)
         
         # Connect button

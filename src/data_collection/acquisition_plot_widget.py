@@ -77,6 +77,7 @@ class AcquisitionPlotWidget(QWidget):
         
         # Controls layout
         controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(15)  # Add more spacing between elements
         
         # Channel checkboxes
         channels_label = QLabel("Available Channels:")
@@ -111,6 +112,7 @@ class AcquisitionPlotWidget(QWidget):
             
             self.channel_checkboxes[channel] = checkbox
             controls_layout.addWidget(checkbox)
+            controls_layout.addSpacing(5)  # Add small spacing after each checkbox
             
         controls_layout.addStretch()
         
