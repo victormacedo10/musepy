@@ -25,6 +25,7 @@ from src.data_collection.data_collection_widget import DataCollectionWidget
 from src.data_analysis.data_analysis_widget import (DataAnalysisWidget, InputDataWidget, ProcessingWidget, 
                                                     VisualizationWidget, VariableInspectorWidget, SessionManagementWidget)
 
+
 class MusePyApp(QMainWindow):
     """Main application window for MusePy"""
     

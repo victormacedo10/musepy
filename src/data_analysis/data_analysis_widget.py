@@ -7,6 +7,8 @@ import pickle
 import pandas as pd
 import numpy as np
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -19,6 +21,37 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QAction
+
+
+def is_python_available():
+    """Check if Python is available on the system (for external script execution)"""
+    try:
+        # Try to run python command
+        result = subprocess.run([sys.executable, '--version'], 
+                              capture_output=True, text=True, timeout=5)
+        return result.returncode == 0
+    except Exception:
+        # If current Python is not available, try common Python commands
+        for cmd in ['python', 'python3', 'python.exe']:
+            try:
+                result = subprocess.run([cmd, '--version'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                continue
+        return False
+
+
+def is_external_script_supported():
+    """Check if external script loading is supported (Python available or not PyInstaller)"""
+    # If running from PyInstaller, external scripts may not work reliably
+    if hasattr(sys, 'frozen') and hasattr(sys, '_MEIPASS'):
+        # Running from PyInstaller bundle
+        return is_python_available()
+    else:
+        # Running from source code - external scripts should work
+        return True
 
 
 class ResponsiveCanvas(FigureCanvas):
@@ -730,6 +763,7 @@ class ProcessingWidget(QGroupBox):
         
         self.setup_ui()
         self.setup_connections()
+        self.setup_external_script_support()
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -743,7 +777,11 @@ class ProcessingWidget(QGroupBox):
         script_path_layout.addWidget(path_label)
 
         self.script_path_edit = QLineEdit()
-        self.script_path_edit.setPlaceholderText("Select a processing script to load")
+        self.script_path_edit.setPlaceholderText("Enter 'Default' or select a processing script")
+        
+        # Set default script path to "Default"
+        self.script_path_edit.setText("Default")
+        
         script_path_layout.addWidget(self.script_path_edit)
 
         self.browse_button = QPushButton("📁")
@@ -817,6 +855,14 @@ class ProcessingWidget(QGroupBox):
         self.browse_button.clicked.connect(self.browse_script)
         self.apply_button.clicked.connect(self.apply_processing)
         
+    def setup_external_script_support(self):
+        """Setup external script loading support based on environment"""
+        if not is_external_script_supported():
+            self.browse_button.setEnabled(False)
+            self.browse_button.setToolTip("External script loading not supported in this environment")
+            # Add a note about using default script
+            self.browse_button.setText("📁 (Default Only)")
+        
     def browse_script(self):
         """Browse for a script to load"""
         # Get default experiments directory (experiments folder in app.py directory)
@@ -841,18 +887,33 @@ class ProcessingWidget(QGroupBox):
             QMessageBox.warning(self, "Input Error", "Please provide a script path.")
             return
             
-        if not os.path.exists(script_path):
+        # Check if file exists (skip check for "Default")
+        if script_path != "Default" and not os.path.exists(script_path):
             QMessageBox.warning(self, "File Error", "Script file does not exist.")
             return
             
         # Auto-generate script ID from filename
-        script_id = Path(script_path).stem
+        if script_path == "Default":
+            script_id = "neuro_v1_processing"
+        else:
+            script_id = Path(script_path).stem
         
         try:
-            # Verify the script has the required function
-            spec = importlib.util.spec_from_file_location(script_id, script_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            # Check if this is the default script
+            if script_path == "Default":
+                # Use direct import for default script
+                import sys
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                root_dir = os.path.dirname(os.path.dirname(current_dir))
+                if root_dir not in sys.path:
+                    sys.path.insert(0, root_dir)
+                
+                from experiments.neuro_v1 import processing as module
+            else:
+                # Use importlib for external scripts
+                spec = importlib.util.spec_from_file_location(script_id, script_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
             
             if not hasattr(module, 'processing_function'):
                 QMessageBox.warning(self, "Function Error", "Script must contain a 'processing_function' function.")
@@ -924,6 +985,7 @@ class VisualizationWidget(QGroupBox):
         
         self.setup_ui()
         self.setup_connections()
+        self.setup_external_script_support()
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -937,7 +999,11 @@ class VisualizationWidget(QGroupBox):
         script_path_layout.addWidget(path_label)
 
         self.script_path_edit = QLineEdit()
-        self.script_path_edit.setPlaceholderText("Select a visualization script to load")
+        self.script_path_edit.setPlaceholderText("Enter 'Default' or select a visualization script")
+        
+        # Set default script path to "Default"
+        self.script_path_edit.setText("Default")
+        
         script_path_layout.addWidget(self.script_path_edit)
 
         self.browse_button = QPushButton("📁")
@@ -1011,6 +1077,14 @@ class VisualizationWidget(QGroupBox):
         self.browse_button.clicked.connect(self.browse_script)
         self.view_output_button.clicked.connect(self.view_output)
         
+    def setup_external_script_support(self):
+        """Setup external script loading support based on environment"""
+        if not is_external_script_supported():
+            self.browse_button.setEnabled(False)
+            self.browse_button.setToolTip("External script loading not supported in this environment")
+            # Add a note about using default script
+            self.browse_button.setText("📁 (Default Only)")
+        
     def browse_script(self):
         """Browse for a script to load"""
         # Get default experiments directory (experiments folder in app.py directory)
@@ -1035,18 +1109,33 @@ class VisualizationWidget(QGroupBox):
             QMessageBox.warning(self, "Input Error", "Please provide a script path.")
             return
             
-        if not os.path.exists(script_path):
+        # Check if file exists (skip check for "Default")
+        if script_path != "Default" and not os.path.exists(script_path):
             QMessageBox.warning(self, "File Error", "Script file does not exist.")
             return
             
         # Auto-generate script ID from filename
-        script_id = Path(script_path).stem
+        if script_path == "Default":
+            script_id = "neuro_v1_visualization"
+        else:
+            script_id = Path(script_path).stem
         
         try:
-            # Verify the script has the required function
-            spec = importlib.util.spec_from_file_location(script_id, script_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            # Check if this is the default script
+            if script_path == "Default":
+                # Use direct import for default script
+                import sys
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                root_dir = os.path.dirname(os.path.dirname(current_dir))
+                if root_dir not in sys.path:
+                    sys.path.insert(0, root_dir)
+                
+                from experiments.neuro_v1 import visualization as module
+            else:
+                # Use importlib for external scripts
+                spec = importlib.util.spec_from_file_location(script_id, script_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
             
             if not hasattr(module, 'visualization_function'):
                 QMessageBox.warning(self, "Function Error", "Script must contain a 'visualization_function' function.")
@@ -1449,9 +1538,10 @@ class DataAnalysisWidget(QWidget):
             }
         """)
         
-        # Second dropdown (dynamic options) - stretching
+        # Second dropdown (dynamic options) - stretching with increased length
         options_combo = QComboBox()
         options_combo.addItem("None")
+        options_combo.setMinimumWidth(200)  # Increased minimum width
         options_combo.setStyleSheet("""
             QComboBox {
                 background-color: white;
@@ -1460,6 +1550,7 @@ class DataAnalysisWidget(QWidget):
                 padding: 4px 8px;
                 color: #495057;
                 font-size: 11px;
+                min-width: 200px;
             }
             QComboBox::drop-down {
                 border: none;
@@ -1475,6 +1566,7 @@ class DataAnalysisWidget(QWidget):
                 border: 1px solid #ced4da;
                 selection-background-color: #e3f2fd;
                 selection-color: #495057;
+                min-width: 250px;
             }
         """)
         

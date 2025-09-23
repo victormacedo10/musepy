@@ -9,3 +9,8 @@ matplotlib==3.10.5
 pyqtgraph==0.13.7
 # EEG Data Acquisition
 brainflow==5.18.1
+# Google Drive Integration (optional)
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+google-api-python-client==2.152.0
