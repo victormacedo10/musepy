@@ -1541,7 +1541,7 @@ class DataAnalysisWidget(QWidget):
         # Second dropdown (dynamic options) - stretching with increased length
         options_combo = QComboBox()
         options_combo.addItem("None")
-        options_combo.setMinimumWidth(200)  # Increased minimum width
+        options_combo.setMinimumWidth(300)  # Increased minimum width for better readability
         options_combo.setStyleSheet("""
             QComboBox {
                 background-color: white;
@@ -1550,7 +1550,7 @@ class DataAnalysisWidget(QWidget):
                 padding: 4px 8px;
                 color: #495057;
                 font-size: 11px;
-                min-width: 200px;
+                min-width: 300px;
             }
             QComboBox::drop-down {
                 border: none;
@@ -1566,7 +1566,7 @@ class DataAnalysisWidget(QWidget):
                 border: 1px solid #ced4da;
                 selection-background-color: #e3f2fd;
                 selection-color: #495057;
-                min-width: 250px;
+                min-width: 350px;
             }
         """)
         
