@@ -18,7 +18,7 @@ A comprehensive, user-friendly application for real-time EEG data acquisition an
 - **Modular processing pipeline** with custom script support and background processing
 - **Flexible experiment framework** for custom analysis workflows
 - **Interactive plotting** with matplotlib integration and customizable visualizations
-- **Data table visualization** with pandas DataFrame support and export capabilities
+- **Data table visualization** with fast DataFrame support and export capabilities
 - **Session management** for saving/loading analysis states with persistent storage
 - **Variable inspector** for real-time data exploration and debugging
 - **Input data management** with support for multiple file formats and data sources
@@ -157,7 +157,7 @@ def processing_function(inputs_dict):
     Returns:
         dict: Processed data dictionary with any structure
     """
-    import pandas as pd
+    from src.utils import pd
     import numpy as np
     import pickle
     
@@ -204,7 +204,7 @@ def experiment_function(inputs_dict, processed_data_dict):
         dict: Results with 'plots' and 'tables' keys
     """
     import matplotlib.pyplot as plt
-    import pandas as pd
+    from src.utils import pd
     
     results = {'plots': {}, 'tables': {}}
     

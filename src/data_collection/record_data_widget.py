@@ -3,7 +3,6 @@ Record Data Widget - Handles data recording controls
 """
 
 import pickle
-import os
 import io
 from pathlib import Path
 from datetime import datetime
@@ -13,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QTimer, Qt
 from PySide6.QtGui import QPixmap, QIcon
-import pandas as pd
+from ..utils import pd
 
 # Google Drive imports
 try:
@@ -541,8 +540,18 @@ class RecordDataWidget(QGroupBox):
             self.gdrive_btn.setToolTip("Google Drive libraries not installed - install to enable upload")
             return
             
-        # Load folder ID
+        # Check for credentials.json file
         base_path = Path(__file__).parent.parent.parent
+        credentials_file = base_path / "google_drive" / "credentials.json"
+        
+        if not credentials_file.exists():
+            # Uncheck the Google Drive button and update tooltip
+            self.gdrive_btn.setChecked(False)
+            self.gdrive_btn.setToolTip("Google Drive credentials not found - add credentials.json to enable upload")
+            self.gdrive_enabled = False
+            return
+            
+        # Load folder ID
         folder_id_file = base_path / "google_drive" / "folder_id.txt"
         
         if folder_id_file.exists():

@@ -3,7 +3,7 @@ Acquisition Plot Widget - Real-time EEG visualization with PyQtGraph
 """
 
 import numpy as np
-import pandas as pd
+from ..utils import pd
 import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QSpinBox
@@ -180,8 +180,12 @@ class AcquisitionPlotWidget(QWidget):
                 time_data = data['time_rel']
                 channel_data = data[channel]
                 
+                # Convert to numpy arrays for PyQtGraph compatibility
+                time_array = time_data.to_numpy() if hasattr(time_data, 'to_numpy') else time_data
+                channel_array = channel_data.to_numpy() if hasattr(channel_data, 'to_numpy') else channel_data
+                
                 # Update curve data
-                self.curves[channel].setData(time_data, channel_data)
+                self.curves[channel].setData(time_array, channel_array)
                 
         # Update plot range to show last N seconds
         if 'time_rel' in data.columns and len(data) > 0:
@@ -210,7 +214,12 @@ class AcquisitionPlotWidget(QWidget):
                         time_data = np.arange(len(eeg_data))
                         
                     channel_data = eeg_data[channel]
-                    self.curves[channel].setData(time_data, channel_data)
+                    
+                    # Convert to numpy arrays for PyQtGraph compatibility
+                    time_array = time_data.to_numpy() if hasattr(time_data, 'to_numpy') else time_data
+                    channel_array = channel_data.to_numpy() if hasattr(channel_data, 'to_numpy') else channel_data
+                    
+                    self.curves[channel].setData(time_array, channel_array)
                     
             # Set full range for recording view
             if 'time_rel' in eeg_data.columns:

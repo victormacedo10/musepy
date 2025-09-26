@@ -1,6 +1,5 @@
 # Data Processing and Analysis
 numpy==2.3.2
-pandas==2.3.2
 scipy==1.16.1
 # Core GUI Framework
 PySide6==6.9.2

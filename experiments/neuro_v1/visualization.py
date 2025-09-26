@@ -1,5 +1,8 @@
 import matplotlib.pyplot as plt
-import pandas as pd
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from src.utils import pd
 import numpy as np
 from scipy.signal import spectrogram
 
@@ -122,7 +125,31 @@ def visualization_function(inputs_dict, processing_dict):
 
     # create dataframe for EEG band power (absolute power from PSD)
     eeg_bp = processing_dict['eeg']['band_power']
-    df_bp = pd.DataFrame(eeg_bp).T
+    
+    # Convert the nested dictionary structure to a proper DataFrame
+    # eeg_bp structure: {'channel_name': {'delta': value, 'theta': value, ...}}
+    # We want: rows = channels, columns = frequency bands
+    
+    # First, create a list of dictionaries for each channel
+    # Define the order of frequency bands (progressive order)
+    band_order = ['delta', 'theta', 'alpha', 'beta', 'gamma']
+    
+    channel_data = []
+    for channel, band_powers in eeg_bp.items():
+        row_data = {'Channel': channel}
+        # Add frequency bands in the correct order
+        for band in band_order:
+            if band in band_powers:
+                row_data[band] = band_powers[band]
+        channel_data.append(row_data)
+    
+    # Create DataFrame from the list of dictionaries
+    df_bp = pd.DataFrame(channel_data)
+    
+    # Set the correct column order: Channel first, then frequency bands in progressive order
+    column_order = ['Channel'] + band_order
+    df_bp = df_bp[column_order]
+    
     # rename columns to include frequency band ranges
     band_ranges = {
         'delta': (0.5, 4),
@@ -133,9 +160,7 @@ def visualization_function(inputs_dict, processing_dict):
     }
     rename_dict = {band: f"{band} ({low} - {high} Hz)" for band, (low, high) in band_ranges.items()}
     df_bp.rename(columns=rename_dict, inplace=True)
-    # move channel names from index into a column and drop index
-    df_bp.reset_index(inplace=True)
-    df_bp.rename(columns={'index': 'Channel'}, inplace=True)
+    
     # store table with units
     output["tables"]["EEG Bands Power (µV²)"] = df_bp.round(2)
 

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Dict, Any
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel
 from PySide6.QtGui import QIcon, QPalette, QColor
-import matplotlib as mpl
 import matplotlib
 matplotlib.use("Qt5Agg")              # match the working script
 import matplotlib as mpl
@@ -339,7 +338,11 @@ class MusePyApp(QMainWindow):
         """Handle visualization execution event"""
         # Update the data analysis widget with new visualization data
         if hasattr(self, 'data_analysis_widget'):
-            self.data_analysis_widget.update_visualization_data(self.visualization_results)
+            # Get visualization results from the visualization widget
+            if hasattr(self, 'visualization_widget'):
+                visualization_data = self.visualization_widget.get_visualization_results()
+                if visualization_data:
+                    self.data_analysis_widget.update_visualization_data(visualization_data)
             
 
             
@@ -356,12 +359,16 @@ class MusePyApp(QMainWindow):
             combined_dict["input"] = self.input_data_widget.get_data_dict()
             
         # Add processing results
-        if hasattr(self, 'processing_results') and self.processing_results:
-            combined_dict["processing"] = self.processing_results
+        if hasattr(self, 'processing_widget'):
+            processing_data = self.processing_widget.get_processing_results()
+            if processing_data:
+                combined_dict["processing"] = processing_data
             
         # Add visualization results
-        if hasattr(self, 'visualization_results') and self.visualization_results:
-            combined_dict["visualization"] = self.visualization_results
+        if hasattr(self, 'visualization_widget'):
+            visualization_data = self.visualization_widget.get_visualization_results()
+            if visualization_data:
+                combined_dict["visualization"] = visualization_data
             
         return combined_dict
     

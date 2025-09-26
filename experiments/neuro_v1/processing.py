@@ -3,99 +3,6 @@ import pickle
 from scipy.signal import firwin, filtfilt, iirnotch, welch
 
 
-def remove_line_noise(eeg_array, fs, line_freq=50.0):
-    """
-    Remove line noise using zapline or DSS-based method.
-    eeg_array: channels × time
-    returns cleaned_array
-    """
-    # notch at line_freq with Q factor
-    # Q value: e.g. 30
-    b, a = iirnotch(w0=line_freq/(fs/2), Q=30)
-    cleaned = filtfilt(b, a, eeg_array, axis=1)
-    return cleaned
-
-def design_fir_filter(fs, cutoff, filter_type='lowpass', transition_bw=None):
-    """
-    Design a FIR filter using windowed sinc, return filter coefficients.
-    cutoff: cutoff frequency (Hz; if lowpass, it's high cutoff; if highpass, low cutoff)
-    filter_type: 'lowpass' or 'highpass'
-    transition_bw: transition bandwidth in Hz
-    """
-    nyq = fs / 2
-    if filter_type == 'lowpass':
-        # e.g., cutoff at ~50 Hz, transition_bw ~20 Hz → so passband end at cutoff - (transition_bw/2), stopband start at cutoff + (transition_bw/2)
-        # But firwin takes cutoff frequency(s) normalized to Nyquist
-        # For a simple lowpass, we specify cutoff as cutoff, but we need filter order to achieve desired transition width
-        # Approximate filter order using: N = (fs / transition_bw) * some constant (~3.3 for Hamming, etc.)
-        N = int(np.ceil((fs / transition_bw) * 3.3))
-        if N % 2 == 0:
-            N += 1  # make sure order is odd for symmetric filter
-        taps = firwin(N, cutoff / nyq, window='hann', pass_zero=True)
-    elif filter_type == 'highpass':
-        N = int(np.ceil((fs / transition_bw) * 3.3))
-        if N % 2 == 0:
-            N += 1
-        taps = firwin(N, cutoff / nyq, window='hann', pass_zero=False)
-    else:
-        raise ValueError("filter_type must be 'lowpass' or 'highpass'")
-    return taps
-
-def apply_fir(eeg_array, taps):
-    """
-    Apply FIR filter with zero-phase (filtfilt).
-    eeg_array: channels × time
-    taps: filter coefficients
-    """
-    return filtfilt(taps, [1.0], eeg_array, axis=1)
-
-def re_reference(eeg_raw_dict):
-    """
-    Given raw channels dict from muse_data['eeg'] for AF7, AF8, TP9, TP10,
-    produce re‑referenced channels: AF7‑TP9, AF8‑TP10
-    returns array of shape (2 × time) plus maybe names
-    """
-    af7 = eeg_raw_dict['AF7']
-    af8 = eeg_raw_dict['AF8']
-    tp9 = eeg_raw_dict['TP9']
-    tp10 = eeg_raw_dict['TP10']
-    # Ensure equal length etc.
-    # Differential
-    chan1 = af7 - tp9
-    chan2 = af8 - tp10
-    return {'AF7_TP9': chan1, 'AF8_TP10': chan2}
-
-def detect_artifacts(eeg_array, fs, thresh_amp=100.0, thresh_std=5.0):
-    """
-    Simple artifact detection for 2 channels.
-    eeg_array: channels × time
-    fs: sample rate
-    thresh_amp: amplitude threshold in microVolts
-    thresh_std: standard deviations for detecting high variance windows
-    returns mask array (boolean) of same length as time: True = clean, False = artifact
-    """
-    # A) amplitude threshold
-    # If either channel exceeds ±thresh_amp → artifact
-    amp_mask = np.all(np.abs(eeg_array) < thresh_amp, axis=0)
-
-    # B) windowed variance: compute moving window std
-    win_s = int(0.5 * fs)  # e.g. 0.5 second windows
-    step = win_s  # non-overlapping for simplicity
-    std_mask = np.ones(eeg_array.shape[1], dtype=bool)
-
-    for start in range(0, eeg_array.shape[1], step):
-        end = min(start + win_s, eeg_array.shape[1])
-        seg = eeg_array[:, start:end]
-        # compute per–channel std
-        seg_std = np.std(seg, axis=1)
-        # if either channel has std much higher than baseline
-        if np.any(seg_std > thresh_std * np.median(seg_std)):
-            std_mask[start:end] = False
-
-    # Combined mask
-    clean_mask = amp_mask & std_mask
-    return clean_mask
-
 # ---- Main processing function ------------------------------------------------
 
 def processing_function(input_dict):
@@ -116,7 +23,7 @@ def processing_function(input_dict):
 
     fs = 256.0
     # Use this if you want to compute the sampling frequency from the time array
-    # fs = int(round(1.0 / np.mean(np.diff(eeg_time)))) 
+    # fs = int(round(1.0 / np.mean(np.diff(eeg_time))))
 
     # Step 0: collect raw data into array
     eeg_channels = ['TP9', 'TP10', 'AF7', 'AF8']

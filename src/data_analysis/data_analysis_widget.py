@@ -4,7 +4,7 @@ Data Analysis Widget - Main interface for data analysis
 
 import os
 import pickle
-import pandas as pd
+from ..utils import pd
 import numpy as np
 import importlib.util
 import subprocess
@@ -937,7 +937,7 @@ class ProcessingWidget(QGroupBox):
             
             # Keep script path for multiple executions
             
-            QMessageBox.information(self, "Success", f"Processing applied successfully. Results stored as '{script_id}'.")
+            QMessageBox.information(self, "Success", "Processing applied successfully. Results stored at Variable Inspector.")
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to apply processing:\n{str(e)}")
@@ -1167,7 +1167,7 @@ class VisualizationWidget(QGroupBox):
             
             # Keep script path for multiple executions
             
-            QMessageBox.information(self, "Success", f"Visualization executed successfully. Results stored as '{script_id}'.")
+            QMessageBox.information(self, "Success", "Visualization executed successfully. Results stored at Variable Inspector.")
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to execute visualization:\n{str(e)}")

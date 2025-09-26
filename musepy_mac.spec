@@ -21,7 +21,6 @@ hidden_imports = [
     
     # Data processing
     'numpy',
-    'pandas',
     'scipy',
     'scipy.sparse',
     'scipy.sparse.csgraph',

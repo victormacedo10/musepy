@@ -1,125 +1,158 @@
-# MusePy Executable Build Guide
+# MusePy Build Specifications
 
-This guide explains how to create standalone executables for MusePy using PyInstaller.
+This document explains the PyInstaller spec files for building MusePy executables on Windows and macOS.
 
-## Prerequisites
+## Files Overview
 
-1. **Python Environment**: Ensure you have Python 3.8+ installed
-2. **Dependencies**: Install all required packages from `requirements.txt`
-3. **PyInstaller**: Will be automatically installed if not present
+- `musepy_windows.spec` - PyInstaller specification for Windows builds
+- `musepy_mac.spec` - PyInstaller specification for macOS builds
+- `build_executable.py` - Automated build script that uses these spec files
 
-## Quick Build
+## What's Included
 
-Run the automated build script:
+### Core Dependencies
+- **PySide6** - GUI framework and Qt bindings
+- **NumPy & Pandas** - Data processing and analysis
+- **SciPy** - Scientific computing functions
+- **Matplotlib & PyQtGraph** - Data visualization and plotting
+- **BrainFlow** - EEG data acquisition from Muse devices
 
+### Google Drive Integration
+- **Google Auth Libraries** - Authentication and API access
+- **Google Drive API Client** - File upload functionality
+- All necessary OAuth and HTTP libraries
+
+### Application Assets
+- **Source Code** (`src/` directory) - All Python modules
+- **Assets** (`assets/` directory) - Icons and images including Google Drive logo
+- **Configuration** (`google_drive/` directory) - Google Drive setup files
+- **Data Directory** (`data/` directory) - Default data storage location
+- **Sessions** (`sessions/` directory) - Session management files
+
+## Platform-Specific Features
+
+### Windows (`musepy_windows.spec`)
+- Includes BrainFlow DLL files from `brainflow/lib/`
+- Windows-optimized binary handling
+- Console disabled for clean GUI experience
+- UPX compression enabled for smaller executables
+
+### macOS (`musepy_mac.spec`)
+- Includes BrainFlow dynamic libraries (.dylib files)
+- macOS-specific binary paths
+- Code signing support (when certificates are available)
+- Console disabled for clean GUI experience
+
+## Building Executables
+
+### Using the Build Script (Recommended)
 ```bash
 python build_executable.py
 ```
-
 This script will:
-- Check and install PyInstaller if needed
-- Clean previous build artifacts
-- Ask you to select the target platform
-- Build the executable
-- Show build results and file locations
+1. Check for PyInstaller installation
+2. Clean previous builds
+3. Let you choose target platform
+4. Build using the appropriate spec file
 
-## Manual Build
-
-### Windows
-
+### Manual Building
 ```bash
-# Install PyInstaller (if not already installed)
-pip install pyinstaller
-
-# Build using the Windows spec file
+# Windows
 pyinstaller --clean musepy_windows.spec
-```
 
-### Mac
-
-```bash
-# Install PyInstaller (if not already installed)
-pip install pyinstaller
-
-# Build using the Mac spec file
+# macOS
 pyinstaller --clean musepy_mac.spec
 ```
 
-## Build Output
+## Output Structure
 
-The build process creates:
+After building, you'll find:
+```
+dist/
+├── MusePy_Windows/          # Windows build
+│   ├── MusePy.exe          # Main executable
+│   ├── brainflow/          # BrainFlow libraries
+│   ├── src/                # Application source
+│   ├── assets/             # Icons and images
+│   ├── google_drive/       # Google Drive config
+│   └── [other dependencies]
+└── MusePy_Mac/             # macOS build
+    ├── MusePy              # Main executable
+    └── [same structure as Windows]
+```
 
-- **`dist/MusePy_Windows/`** (Windows) or **`dist/MusePy_Mac/`** (Mac) - Contains the executable and all dependencies
-- **`build/`** - Build cache (can be deleted after successful build)
+## Google Drive Setup for Distributions
 
-## Executable Features
+When distributing the built executable, users need to:
 
-### Default Scripts
-- **Data Processing**: Uses `experiments/neuro_v1/processing.py` by default
-- **Data Visualization**: Uses `experiments/neuro_v1/visualization.py` by default
-- **No Python Required**: Default scripts work without external Python installation
+1. **Install Google Drive libraries** (if not included):
+   ```bash
+   pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+   ```
 
-### External Script Support
-- **Python Detection**: Automatically detects if Python is available on the target system
-- **Conditional Loading**: External script loading is disabled if Python is not available
-- **Fallback**: Always falls back to default scripts when external scripts can't be loaded
+2. **Set up credentials**:
+   - Place `credentials.json` in the `google_drive/` folder
+   - Add folder ID to `google_drive/folder_id.txt`
 
-### Included Data
-- **Experiments Folder**: Contains all processing and visualization scripts
-- **Data Folder**: Empty folder for user recordings
-- **Sessions Folder**: Empty folder for saved sessions
-- **Documentation**: README.md and LICENSE included
-
-## Distribution
-
-### Windows
-1. Zip the entire `dist/MusePy_Windows/` folder
-2. Distribute the zip file
-3. Users extract and run `MusePy.exe`
-
-### Mac
-1. Zip the entire `dist/MusePy_Mac/` folder
-2. Distribute the zip file
-3. Users extract and run `MusePy`
+3. **First-time authentication**:
+   - The app will open a browser for OAuth authentication
+   - Tokens will be saved in `google_drive/token.json`
 
 ## Troubleshooting
 
-### Build Fails
-1. Ensure all dependencies are installed: `pip install -r requirements.txt`
-2. Check that PyInstaller is installed: `pip install pyinstaller`
-3. Try building with console enabled (edit .spec file: `console=True`)
+### Common Issues
 
-### Executable Doesn't Start
-1. Check if all required DLLs/libraries are included
-2. Run from command line to see error messages
-3. Ensure target system has required system libraries
+1. **Missing BrainFlow libraries**:
+   - Ensure BrainFlow is properly installed
+   - Check that lib files exist in `brainflow/lib/`
 
-### External Scripts Don't Work
-1. Check if Python is installed on target system
-2. Verify script paths are correct
-3. Default scripts should always work regardless of Python availability
+2. **Google Drive not working**:
+   - Verify all Google Drive libraries are installed
+   - Check credentials.json is valid
+   - Ensure folder_id.txt contains a valid Google Drive folder ID
 
-## File Structure
+3. **Large executable size**:
+   - The spec files exclude unnecessary modules (tkinter, tests, etc.)
+   - UPX compression is enabled to reduce size
+   - Consider removing unused dependencies from requirements.txt
 
-```
-dist/
-├── MusePy_Windows/          # Windows executable
-│   ├── MusePy.exe          # Main executable
-│   ├── experiments/        # Processing/visualization scripts
-│   ├── data/              # User data folder
-│   ├── sessions/          # Session storage
-│   └── [dependencies]     # All required libraries
-└── MusePy_Mac/             # Mac executable
-    ├── MusePy              # Main executable
-    ├── experiments/        # Processing/visualization scripts
-    ├── data/              # User data folder
-    ├── sessions/          # Session storage
-    └── [dependencies]     # All required libraries
+4. **Platform-specific errors**:
+   - Windows: Ensure Visual C++ Redistributable is installed
+   - macOS: May need to allow the app in Security & Privacy settings
+
+### Debugging
+
+To enable console output for debugging, change in the spec files:
+```python
+console=True,  # Instead of console=False
 ```
 
-## Notes
+## Customization
 
-- **File Size**: Expect 200-500MB executables due to included dependencies
-- **Performance**: First startup may be slower as PyInstaller extracts files
-- **Updates**: Rebuild executable when updating MusePy code
-- **Compatibility**: Test on target systems before distribution
+### Adding New Dependencies
+1. Add to `hiddenimports` list in both spec files
+2. Add any binary files to `binaries` list
+3. Add data files to `datas` list
+
+### Changing Output Names
+Modify the `name` parameter in the `EXE()` and `COLLECT()` sections.
+
+### Including Additional Files
+Add entries to the `datas` list:
+```python
+('path/to/source', 'destination/in/executable'),
+```
+
+## Performance Optimization
+
+- **UPX compression** is enabled to reduce executable size
+- **Unnecessary modules** are excluded to minimize size
+- **Binary optimization** is enabled for faster startup
+- **Single-file builds** are not used to maintain reasonable file sizes
+
+## Security Considerations
+
+- Google Drive credentials should be kept secure
+- Built executables should be code-signed for distribution
+- Users should be educated about Google Drive permissions
+- Token files contain sensitive authentication data

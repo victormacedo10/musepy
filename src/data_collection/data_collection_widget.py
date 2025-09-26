@@ -6,8 +6,8 @@ import pickle
 import time
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
+from ..utils import pd
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
 from PySide6.QtCore import QTimer
 
