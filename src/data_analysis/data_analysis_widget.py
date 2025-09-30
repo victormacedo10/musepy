@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QPushButton, QLineEdit, 
     QLabel, QComboBox, QSpinBox, QTextEdit, QFileDialog, 
     QMessageBox, QSizePolicy, QTreeWidget, QTreeWidgetItem,
-    QMenu, QAbstractItemView, QDialog, QSplitter, QTableWidget, QTableWidgetItem
+    QMenu, QAbstractItemView, QDialog, QSplitter, QTableWidget, QTableWidgetItem,
+    QTabWidget
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QAction
+import pyqtgraph as pg
 
 
 def is_python_available():
@@ -54,28 +56,6 @@ def is_external_script_supported():
         return True
 
 
-class ResponsiveCanvas(FigureCanvas):
-    def __init__(self, fig, parent=None):
-        super().__init__(fig)
-        self.parent_widget = parent
-        
-    def resizeEvent(self, event):
-        fig = self.figure
-        dpi = fig.get_dpi()                     # logical DPI
-        w_in = max(4.0, self.width()  / dpi)    # keep sane min
-        h_in = max(3.0, self.height() / dpi)
-        if (abs(fig.get_figwidth()  - w_in) > 1e-2 or
-            abs(fig.get_figheight() - h_in) > 1e-2):
-            fig.set_size_inches(w_in, h_in, forward=True)
-        super().resizeEvent(event)
-        
-        # Trigger comprehensive plot resize if parent widget supports it
-        if self.parent_widget and hasattr(self.parent_widget, 'resize_plot_to_fit_area'):
-            # Find the widget that contains this canvas
-            for child in self.parent_widget.findChildren(QWidget):
-                if hasattr(child, 'canvas') and child.canvas == self:
-                    self.parent_widget.resize_plot_to_fit_area(child)
-                    break
 
 
 
@@ -88,28 +68,6 @@ class SafeNavigationToolbar(NavigationToolbar):
             pass
 
 
-class ResponsiveContentArea(QWidget):
-    """Content area widget that can handle resize events for responsive plotting"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent_widget = parent
-        self.data_analysis_widget = None
-        
-    def set_data_analysis_widget(self, data_analysis_widget):
-        """Set reference to the DataAnalysisWidget for proper resize handling"""
-        self.data_analysis_widget = data_analysis_widget
-        
-    def resizeEvent(self, event):
-        """Handle resize events to adjust plot sizes"""
-        super().resizeEvent(event)
-        # Call the DataAnalysisWidget's resize method if available
-        if self.data_analysis_widget and hasattr(self.data_analysis_widget, 'resize_plot_to_fit_area'):
-            # Find the widget that contains this content area
-            for child in self.data_analysis_widget.findChildren(QWidget):
-                if hasattr(child, 'content_area') and child.content_area == self:
-                    self.data_analysis_widget.resize_plot_to_fit_area(child)
-                    break
 
 
 class VariableInspectorWidget(QWidget):
@@ -1431,8 +1389,517 @@ class SessionManagementWidget(QGroupBox):
             QMessageBox.critical(self, "Load Error", f"An error occurred while loading the session:\n{str(e)}")
 
 
+class TableViewDialog(QDialog):
+    """Modal dialog for viewing table data"""
+    
+    def __init__(self, table_data, table_name, parent=None):
+        super().__init__(parent)
+        self.table_data = table_data
+        self.table_name = table_name
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        """Setup the dialog UI"""
+        self.setWindowTitle(f"Table Viewer - {self.table_name}")
+        self.setModal(True)
+        self.resize(800, 600)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        
+        # Title label
+        title_label = QLabel(f"📊 {self.table_name}")
+        title_label.setStyleSheet("""
+            QLabel {
+                font-weight: bold;
+                color: #495057;
+                font-size: 14px;
+                padding: 5px 0px;
+            }
+        """)
+        layout.addWidget(title_label)
+        
+        # Create table widget
+        table_widget = QTableWidget()
+        table_widget.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                color: #495057;
+                font-size: 11px;
+                gridline-color: #f8f9fa;
+            }
+            QTableWidget::item {
+                padding: 4px;
+                border-bottom: 1px solid #f8f9fa;
+            }
+            QTableWidget::item:selected {
+                background-color: #e3f2fd;
+                color: #495057;
+            }
+            QTableWidget::item:alternate {
+                background-color: #f8f9fa;
+            }
+            QHeaderView::section {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                padding: 4px;
+                font-weight: bold;
+                color: #495057;
+            }
+        """)
+        
+        # Hide row headers (row index)
+        table_widget.verticalHeader().setVisible(False)
+        
+        # Populate table based on data type
+        if isinstance(self.table_data, pd.DataFrame):
+            # Set dimensions
+            table_widget.setRowCount(len(self.table_data))
+            table_widget.setColumnCount(len(self.table_data.columns))
+            
+            # Set headers
+            table_widget.setHorizontalHeaderLabels(self.table_data.columns)
+            
+            # Populate data
+            for i in range(len(self.table_data)):
+                for j in range(len(self.table_data.columns)):
+                    value = self.table_data.iloc[i, j]
+                    item = QTableWidgetItem(str(value))
+                    table_widget.setItem(i, j, item)
+                    
+        elif isinstance(self.table_data, (list, tuple)):
+            # Handle list/tuple data
+            if self.table_data and isinstance(self.table_data[0], (list, tuple)):
+                # 2D data
+                table_widget.setRowCount(len(self.table_data))
+                table_widget.setColumnCount(len(self.table_data[0]))
+                
+                for i, row in enumerate(self.table_data):
+                    for j, value in enumerate(row):
+                        item = QTableWidgetItem(str(value))
+                        table_widget.setItem(i, j, item)
+            else:
+                # 1D data
+                table_widget.setRowCount(len(self.table_data))
+                table_widget.setColumnCount(1)
+                
+                for i, value in enumerate(self.table_data):
+                    item = QTableWidgetItem(str(value))
+                    table_widget.setItem(i, 0, item)
+        
+        # Enable alternating row colors
+        table_widget.setAlternatingRowColors(True)
+        
+        # Enable scrolling
+        table_widget.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        table_widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        
+        # Auto-resize columns
+        table_widget.resizeColumnsToContents()
+        
+        layout.addWidget(table_widget)
+        
+        # Add close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+        """)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(close_button)
+        layout.addLayout(button_layout)
+
+
+class DataEditingWidget(QWidget):
+    """Widget for editing and cropping data files"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.channel_names = ['TP9', 'AF7', 'AF8', 'TP10']
+        self.channel_colors = {
+            'TP9': '#E74C3C',     # Red
+            'AF7': '#3498DB',     # Blue
+            'AF8': '#F39C12',     # Orange
+            'TP10': '#27AE60'     # Green
+        }
+        
+        self.current_file_id = None
+        self.current_data = None
+        self.cropped_data = None
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        """Setup the user interface"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        
+        # File selection dropdown
+        file_selection_layout = QHBoxLayout()
+        file_label = QLabel("Select File:")
+        file_label.setStyleSheet("""
+            QLabel {
+                color: #495057;
+                font-size: 12px;
+                font-weight: bold;
+            }
+        """)
+        file_selection_layout.addWidget(file_label)
+        
+        self.file_combo = QComboBox()
+        self.file_combo.addItem("None")
+        self.file_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.file_combo.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #495057;
+                font-size: 11px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                border: 1px solid #ced4da;
+                color: #495057;
+                selection-background-color: #e3f2fd;
+                selection-color: #495057;
+            }
+        """)
+        self.file_combo.currentTextChanged.connect(self.on_file_changed)
+        file_selection_layout.addWidget(self.file_combo)
+        
+        layout.addLayout(file_selection_layout)
+        
+        # Create PyQtGraph widget
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground('w')  # White background
+        self.plot_item = self.plot_widget.getPlotItem()
+        
+        # Configure plot
+        self.plot_item.setTitle("EEG Data - Data Editing", color='#495057', size='14pt')
+        self.plot_item.setLabel('left', 'Amplitude (μV)', color='#495057')
+        self.plot_item.setLabel('bottom', 'Time (s)', color='#495057')
+        self.plot_item.showGrid(x=True, y=True, alpha=0.3)
+        
+        # Set axis colors
+        self.plot_item.getAxis('left').setPen(pg.mkPen(color='#495057'))
+        self.plot_item.getAxis('bottom').setPen(pg.mkPen(color='#495057'))
+        self.plot_item.getAxis('left').setTextPen(pg.mkPen(color='#495057'))
+        self.plot_item.getAxis('bottom').setTextPen(pg.mkPen(color='#495057'))
+        
+        # Initialize curves for each channel
+        self.curves = {}
+        for channel in self.channel_names:
+            color = self.channel_colors[channel]
+            pen = pg.mkPen(color=color, width=2)
+            self.curves[channel] = self.plot_item.plot(
+                name=channel,
+                pen=pen,
+                symbol=None
+            )
+        
+        # Add linear region for cropping
+        self.crop_region = pg.LinearRegionItem(
+            values=[0, 10],
+            brush=pg.mkBrush(100, 100, 255, 50),
+            pen=pg.mkPen('b', width=2)
+        )
+        self.crop_region.setZValue(-10)
+        self.plot_item.addItem(self.crop_region)
+        
+        layout.addWidget(self.plot_widget)
+        
+        # Buttons layout
+        buttons_layout = QHBoxLayout()
+        buttons_layout.addStretch()
+        
+        # Apply Crop button (updates data in place)
+        self.apply_crop_button = QPushButton("Apply Crop")
+        self.apply_crop_button.setEnabled(False)
+        self.apply_crop_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
+            }
+            QPushButton:disabled {
+                background-color: #6c757d;
+                color: #ced4da;
+            }
+        """)
+        self.apply_crop_button.clicked.connect(self.apply_crop)
+        buttons_layout.addWidget(self.apply_crop_button)
+        
+        # Save Cropped Data button (saves to file)
+        self.save_cropped_button = QPushButton("Save Cropped Data")
+        self.save_cropped_button.setEnabled(False)
+        self.save_cropped_button.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #218838;
+            }
+            QPushButton:pressed {
+                background-color: #1e7e34;
+            }
+            QPushButton:disabled {
+                background-color: #6c757d;
+                color: #ced4da;
+            }
+        """)
+        self.save_cropped_button.clicked.connect(self.save_cropped_data)
+        buttons_layout.addWidget(self.save_cropped_button)
+        
+        layout.addLayout(buttons_layout)
+        
+    def update_file_list(self, file_dict):
+        """Update the file dropdown with available files"""
+        # Block signals to avoid triggering on_file_changed
+        self.file_combo.blockSignals(True)
+        
+        # Clear and repopulate
+        self.file_combo.clear()
+        self.file_combo.addItem("None")
+        
+        for file_id in file_dict.keys():
+            self.file_combo.addItem(file_id)
+        
+        self.file_combo.blockSignals(False)
+        
+    def on_file_changed(self, file_id):
+        """Handle file selection change"""
+        if not file_id or file_id == "None":
+            self.clear_plot()
+            self.current_file_id = None
+            self.current_data = None
+            self.apply_crop_button.setEnabled(False)
+            self.save_cropped_button.setEnabled(False)
+            return
+        
+        # Get data from parent
+        if hasattr(self.parent, 'input_data_widget'):
+            data_dict = self.parent.input_data_widget.get_data_dict()
+            if file_id in data_dict:
+                self.current_file_id = file_id
+                self.current_data = data_dict[file_id]
+                self.plot_data(self.current_data)
+                self.apply_crop_button.setEnabled(True)
+                self.save_cropped_button.setEnabled(True)
+            else:
+                self.clear_plot()
+                self.apply_crop_button.setEnabled(False)
+                self.save_cropped_button.setEnabled(False)
+        
+    def plot_data(self, data):
+        """Plot EEG data from the selected file"""
+        try:
+            if 'eeg' not in data:
+                QMessageBox.warning(self, "No EEG Data", "The selected file does not contain EEG data.")
+                return
+            
+            eeg_data = data['eeg']
+            
+            # Get time data
+            if 'timestamp' in eeg_data.columns:
+                time_data = (eeg_data['timestamp'] - eeg_data['timestamp'].min()).to_numpy()
+            else:
+                time_data = np.arange(len(eeg_data))
+            
+            # Plot each channel
+            for channel in self.channel_names:
+                if channel in eeg_data.columns:
+                    channel_data = eeg_data[channel].to_numpy()
+                    self.curves[channel].setData(time_data, channel_data)
+            
+            # Set crop region to full range initially
+            if len(time_data) > 0:
+                time_min = time_data[0]
+                time_max = time_data[-1]
+                self.crop_region.setRegion([time_min, time_max])
+                self.plot_item.setXRange(time_min, time_max, padding=0)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to plot data:\n{str(e)}")
+    
+    def clear_plot(self):
+        """Clear all plot curves"""
+        for channel in self.channel_names:
+            if channel in self.curves:
+                self.curves[channel].clear()
+    
+    def apply_crop(self):
+        """Apply crop to the current data in place"""
+        if self.current_data is None or self.current_file_id is None:
+            QMessageBox.warning(self, "No Data", "No data is currently loaded.")
+            return
+        
+        try:
+            # Get crop region bounds
+            crop_start, crop_end = self.crop_region.getRegion()
+            
+            # Crop all data types
+            cropped_data = {}
+            
+            # Crop EEG data
+            if 'eeg' in self.current_data:
+                eeg_data = self.current_data['eeg'].copy()
+                if 'timestamp' in eeg_data.columns:
+                    time_data = eeg_data['timestamp'] - eeg_data['timestamp'].min()
+                    mask = (time_data >= crop_start) & (time_data <= crop_end)
+                    cropped_data['eeg'] = eeg_data[mask].reset_index(drop=True)
+                else:
+                    cropped_data['eeg'] = eeg_data
+            
+            # Crop PPG data
+            if 'ppg' in self.current_data:
+                ppg_data = self.current_data['ppg'].copy()
+                if 'timestamp' in ppg_data.columns:
+                    time_data = ppg_data['timestamp'] - ppg_data['timestamp'].min()
+                    mask = (time_data >= crop_start) & (time_data <= crop_end)
+                    cropped_data['ppg'] = ppg_data[mask].reset_index(drop=True)
+                else:
+                    cropped_data['ppg'] = ppg_data
+            
+            # Crop IMU data
+            if 'imu' in self.current_data:
+                imu_data = self.current_data['imu'].copy()
+                if 'timestamp' in imu_data.columns:
+                    time_data = imu_data['timestamp'] - imu_data['timestamp'].min()
+                    mask = (time_data >= crop_start) & (time_data <= crop_end)
+                    cropped_data['imu'] = imu_data[mask].reset_index(drop=True)
+                else:
+                    cropped_data['imu'] = imu_data
+            
+            # Copy any other data
+            for key in self.current_data:
+                if key not in ['eeg', 'ppg', 'imu']:
+                    cropped_data[key] = self.current_data[key]
+            
+            # Update the data in the parent's input_data_widget
+            if hasattr(self.parent, 'input_data_widget'):
+                self.parent.input_data_widget.data_dict[self.current_file_id] = cropped_data
+                self.current_data = cropped_data
+                
+                # Replot the cropped data
+                self.plot_data(cropped_data)
+                
+                # Update variable inspector
+                if hasattr(self.parent, 'variable_inspector'):
+                    data_dict = self.parent.get_combined_data_dict()
+                    self.parent.variable_inspector.update_data(data_dict)
+                
+                QMessageBox.information(self, "Success", "Data cropped successfully and updated in place.")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to apply crop:\n{str(e)}")
+    
+    def save_cropped_data(self):
+        """Save the cropped data to a .data file"""
+        if self.current_data is None or self.current_file_id is None:
+            QMessageBox.warning(self, "No Data", "No data is currently loaded.")
+            return
+        
+        try:
+            # Get crop region bounds
+            crop_start, crop_end = self.crop_region.getRegion()
+            
+            # Crop all data types
+            cropped_data = {}
+            
+            # Crop EEG data
+            if 'eeg' in self.current_data:
+                eeg_data = self.current_data['eeg'].copy()
+                if 'timestamp' in eeg_data.columns:
+                    time_data = eeg_data['timestamp'] - eeg_data['timestamp'].min()
+                    mask = (time_data >= crop_start) & (time_data <= crop_end)
+                    cropped_data['eeg'] = eeg_data[mask].reset_index(drop=True)
+                else:
+                    cropped_data['eeg'] = eeg_data
+            
+            # Crop PPG data
+            if 'ppg' in self.current_data:
+                ppg_data = self.current_data['ppg'].copy()
+                if 'timestamp' in ppg_data.columns:
+                    time_data = ppg_data['timestamp'] - ppg_data['timestamp'].min()
+                    mask = (time_data >= crop_start) & (time_data <= crop_end)
+                    cropped_data['ppg'] = ppg_data[mask].reset_index(drop=True)
+                else:
+                    cropped_data['ppg'] = ppg_data
+            
+            # Crop IMU data
+            if 'imu' in self.current_data:
+                imu_data = self.current_data['imu'].copy()
+                if 'timestamp' in imu_data.columns:
+                    time_data = imu_data['timestamp'] - imu_data['timestamp'].min()
+                    mask = (time_data >= crop_start) & (time_data <= crop_end)
+                    cropped_data['imu'] = imu_data[mask].reset_index(drop=True)
+                else:
+                    cropped_data['imu'] = imu_data
+            
+            # Copy any other data
+            for key in self.current_data:
+                if key not in ['eeg', 'ppg', 'imu']:
+                    cropped_data[key] = self.current_data[key]
+            
+            # Get save location
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            root_dir = os.path.dirname(os.path.dirname(current_dir))
+            data_dir = os.path.join(root_dir, "data")
+            
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Cropped Data",
+                data_dir,
+                "Data Files (*.data);;All Files (*.*)"
+            )
+            
+            if file_path:
+                # Save as pickle
+                with open(file_path, 'wb') as f:
+                    pickle.dump(cropped_data, f)
+                
+                QMessageBox.information(self, "Success", f"Cropped data saved successfully to:\n{file_path}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save cropped data:\n{str(e)}")
+
+
 class DataAnalysisWidget(QWidget):
-    """Main data analysis interface widget with 2x2 grid layout"""
+    """Main data analysis interface widget with single plot and table selection"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1441,78 +1908,93 @@ class DataAnalysisWidget(QWidget):
         
         self.setup_ui()
         
-    def resizeEvent(self, event):
-        """Handle widget resize events to update all plots"""
-        super().resizeEvent(event)
-        # Use a timer to delay the resize to avoid conflicts during layout
-        QTimer.singleShot(50, self.resize_all_plots)
         
     def setup_ui(self):
-        """Setup the user interface with 2x2 grid layout"""
+        """Setup the user interface with tabs for data editing and visualization"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
         
-        # Create main horizontal splitter
-        main_splitter = QSplitter(Qt.Vertical)
-        main_splitter.setChildrenCollapsible(True)
+        # Create tab widget
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                background-color: white;
+            }
+            QTabBar::tab {
+                background-color: #f8f9fa;
+                color: #495057;
+                border: 1px solid #ced4da;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                padding: 8px 16px;
+                margin-right: 2px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background-color: white;
+                color: #007bff;
+            }
+            QTabBar::tab:hover {
+                background-color: #e9ecef;
+            }
+        """)
         
-        # Create upper and lower widgets
-        upper_widget = QWidget()
-        lower_widget = QWidget()
+        # Create Data Editing tab
+        self.data_editing_widget = DataEditingWidget(self.parent)
+        self.tab_widget.addTab(self.data_editing_widget, "Data Editing")
         
-        # Setup upper and lower layouts with vertical splitters
-        self.setup_split_layout(upper_widget, "upper")
-        self.setup_split_layout(lower_widget, "lower")
+        # Create Data Visualization tab
+        self.data_visualization_widget = self.create_visualization_tab()
+        self.tab_widget.addTab(self.data_visualization_widget, "Data Visualization")
         
-        # Add to main splitter
-        main_splitter.addWidget(upper_widget)
-        main_splitter.addWidget(lower_widget)
+        layout.addWidget(self.tab_widget)
         
-        # Set equal sizes
-        main_splitter.setSizes([main_splitter.height() // 2, main_splitter.height() // 2])
-        
-        layout.addWidget(main_splitter)
-        
-    def setup_split_layout(self, parent_widget, region):
-        """Setup a split layout for upper or lower region"""
-        layout = QHBoxLayout(parent_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        
-        # Create vertical splitter
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(True)
-        
-        # Create left and right content areas
-        left_area = self.create_content_area(f"{region}_left")
-        right_area = self.create_content_area(f"{region}_right")
-        
-        # Add to splitter
-        splitter.addWidget(left_area)
-        splitter.addWidget(right_area)
-        
-        # Set equal sizes
-        splitter.setSizes([splitter.width() // 2, splitter.width() // 2])
-        
-        layout.addWidget(splitter)
-        
-    def create_content_area(self, area_id):
-        """Create a content area with dropdowns and display area"""
+    def create_visualization_tab(self):
+        """Create the data visualization tab (existing functionality)"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        
+        # Create main content area
+        self.main_content = self.create_main_content()
+        layout.addWidget(self.main_content, 1)  # Give it stretch factor
+        
+        # Create table selection bar
+        self.table_bar = self.create_table_selection_bar()
+        layout.addWidget(self.table_bar)
+        
+        return widget
+        
+    def create_main_content(self):
+        """Create the main content area with plot display"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(5)
         
-        # Create dropdown layout
-        dropdown_layout = QHBoxLayout()
-        dropdown_layout.setSpacing(5)
+        # Plot label
+        plot_label_layout = QHBoxLayout()
+        plot_label = QLabel("Plot:")
+        plot_label.setStyleSheet("""
+            QLabel {
+                color: #495057;
+                font-size: 12px;
+                font-weight: bold;
+                border: none;
+            }
+        """)
+        plot_label_layout.addWidget(plot_label)
         
-        # First dropdown (Plot/Table) - fixed width with 30/70 proportion
-        type_combo = QComboBox()
-        type_combo.addItems(["Plot", "Table"])
-        type_combo.setFixedWidth(60)  # Smaller width to maintain 30/70 proportion
-        type_combo.setStyleSheet("""
+        # Plot options dropdown
+        self.plot_combo = QComboBox()
+        self.plot_combo.addItem("None")
+        self.plot_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.plot_combo.setStyleSheet("""
             QComboBox {
                 background-color: white;
                 border: 1px solid #ced4da;
@@ -1523,92 +2005,56 @@ class DataAnalysisWidget(QWidget):
             }
             QComboBox::drop-down {
                 border: none;
-                width: 0px;
             }
             QComboBox::down-arrow {
                 image: none;
-                width: 0;
-                height: 0;
             }
             QComboBox QAbstractItemView {
                 background-color: white;
                 border: 1px solid #ced4da;
-                selection-background-color: #e3f2fd;
-                selection-color: #495057;
-            }
-        """)
-        
-        # Second dropdown (dynamic options) - stretching with increased length
-        options_combo = QComboBox()
-        options_combo.addItem("None")
-        options_combo.setMinimumWidth(300)  # Increased minimum width for better readability
-        options_combo.setStyleSheet("""
-            QComboBox {
-                background-color: white;
-                border: 1px solid #ced4da;
-                border-radius: 4px;
-                padding: 4px 8px;
                 color: #495057;
-                font-size: 11px;
-                min-width: 300px;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 0px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                width: 0;
-                height: 0;
-            }
-            QComboBox QAbstractItemView {
-                background-color: white;
-                border: 1px solid #ced4da;
                 selection-background-color: #e3f2fd;
                 selection-color: #495057;
-                min-width: 350px;
             }
         """)
+        self.plot_combo.currentTextChanged.connect(self.on_plot_changed)
+        plot_label_layout.addWidget(self.plot_combo)
         
-        # Add dropdowns to layout
-        dropdown_layout.addWidget(type_combo)
-        dropdown_layout.addWidget(options_combo)
+        layout.addLayout(plot_label_layout)
         
         # Create content display area
-        content_area = ResponsiveContentArea(widget)
-        content_area.set_data_analysis_widget(self)  # Set reference to DataAnalysisWidget
-        content_area.setStyleSheet("""
+        self.plot_content_area = QWidget()
+        self.plot_content_area.setStyleSheet("""
             QWidget {
                 background-color: white;
                 border: 1px solid #ced4da;
                 border-radius: 4px;
             }
         """)
-        content_layout = QVBoxLayout(content_area)
+        content_layout = QVBoxLayout(self.plot_content_area)
         content_layout.setContentsMargins(10, 10, 10, 10)
         
         # Create canvas container for plots
-        canvas_container = QWidget()
-        canvas_layout = QVBoxLayout(canvas_container)
-        canvas_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.addWidget(canvas_container)
+        self.canvas_container = QWidget()
+        self.canvas_layout = QVBoxLayout(self.canvas_container)
+        self.canvas_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(self.canvas_container)
         
-        # Create bottom widget for toolbar and controls (fixed height)
-        bottom_widget = QWidget()
-        bottom_widget.setFixedHeight(50)
-        bottom_widget.setStyleSheet("border: none;")
-        bottom_layout = QHBoxLayout(bottom_widget)
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.addWidget(bottom_widget)
+        # Create bottom widget for toolbar and controls
+        self.bottom_widget = QWidget()
+        self.bottom_widget.setFixedHeight(40)
+        self.bottom_widget.setStyleSheet("border: none;")
+        self.bottom_layout = QHBoxLayout(self.bottom_widget)
+        self.bottom_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(self.bottom_widget)
         
         # Create DPI and save controls
         dpi_label = QLabel("DPI:")
         dpi_label.setStyleSheet("color: #495057; font-size: 11px; border: none;")
-        dpi_input = QSpinBox()
-        dpi_input.setRange(50, 600)
-        dpi_input.setValue(300)  # Default to 300 DPI for high quality
-        dpi_input.setFixedWidth(60)
-        dpi_input.setStyleSheet("""
+        self.dpi_input = QSpinBox()
+        self.dpi_input.setRange(50, 600)
+        self.dpi_input.setValue(300)  # Default to 300 DPI for high quality
+        self.dpi_input.setStyleSheet("""
             QSpinBox {
                 background-color: white;
                 border: 1px solid #ced4da;
@@ -1620,8 +2066,8 @@ class DataAnalysisWidget(QWidget):
         """)
         
         # Save button
-        save_button = QPushButton("Save Figure")
-        save_button.setStyleSheet("""
+        self.save_button = QPushButton("Save Figure")
+        self.save_button.setStyleSheet("""
             QPushButton {
                 background-color: white;
                 color: #495057;
@@ -1633,15 +2079,16 @@ class DataAnalysisWidget(QWidget):
                 background-color: #f8f9fa;
             }
         """)
+        self.save_button.clicked.connect(self.save_current_figure)
         
         # Add controls to bottom layout
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(dpi_label)
-        bottom_layout.addWidget(dpi_input)
-        bottom_layout.addWidget(save_button)
+        self.bottom_layout.addStretch()
+        self.bottom_layout.addWidget(dpi_label)
+        self.bottom_layout.addWidget(self.dpi_input)
+        self.bottom_layout.addWidget(self.save_button)
         
         # Placeholder text
-        placeholder = QLabel("Select Plot or Table to display content")
+        placeholder = QLabel("Select a Plot to display")
         placeholder.setAlignment(Qt.AlignCenter)
         placeholder.setStyleSheet("""
             QLabel {
@@ -1650,128 +2097,163 @@ class DataAnalysisWidget(QWidget):
                 font-size: 12px;
             }
         """)
-        canvas_layout.addWidget(placeholder)
+        self.canvas_layout.addWidget(placeholder)
         
-        # Add layouts to main layout
-        layout.addLayout(dropdown_layout)
-        layout.addWidget(content_area)
+        layout.addWidget(self.plot_content_area, 1)  # Give it stretch factor
         
         # Store references
-        widget.type_combo = type_combo
-        widget.options_combo = options_combo
-        widget.content_area = content_area
-        widget.canvas_container = canvas_container
-        widget.canvas_layout = canvas_layout
-        widget.bottom_widget = bottom_widget
-        widget.bottom_layout = bottom_layout
-        widget.dpi_input = dpi_input
-        widget.save_button = save_button
-        widget.area_id = area_id
-        
-        # Connect signals
-        type_combo.currentTextChanged.connect(lambda text: self.on_type_changed(widget, text))
-        options_combo.currentTextChanged.connect(lambda text: self.on_option_changed(widget, text))
+        self.canvas = None
+        self.plot_toolbar = None
+        self.current_figure = None
         
         return widget
         
-    def on_type_changed(self, widget, content_type):
-        """Handle content type change (Plot/Table)"""
-        # Block signals temporarily to prevent unwanted triggers
-        widget.options_combo.blockSignals(True)
+    def create_table_selection_bar(self):
+        """Create the table selection bar with dropdown and view button"""
+        widget = QWidget()
+        widget.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+            }
+        """)
         
-        # Reset options dropdown
-        widget.options_combo.clear()
-        widget.options_combo.addItem("None")
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
         
-        # Update options based on visualization data
-        if hasattr(self.parent, 'visualization_results') and self.parent.visualization_results:
-            if content_type == "Plot" and "plots" in self.parent.visualization_results:
-                for plot_name in self.parent.visualization_results["plots"].keys():
-                    widget.options_combo.addItem(plot_name)
-            elif content_type == "Table" and "tables" in self.parent.visualization_results:
-                for table_name in self.parent.visualization_results["tables"].keys():
-                    widget.options_combo.addItem(table_name)
+        # Table label
+        table_label = QLabel("Table:")
+        table_label.setStyleSheet("""
+            QLabel {
+                color: #495057;
+                font-size: 12px;
+                font-weight: bold;
+                border: none;
+            }
+        """)
+        layout.addWidget(table_label)
         
-        # Set selection back to "None"
-        widget.options_combo.setCurrentText("None")
+        # Table options dropdown
+        self.table_combo = QComboBox()
+        self.table_combo.addItem("None")
+        self.table_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.table_combo.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #495057;
+                font-size: 11px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                border: 1px solid #ced4da;
+                color: #495057;
+                selection-background-color: #e3f2fd;
+                selection-color: #495057;
+            }
+        """)
+        layout.addWidget(self.table_combo)
         
-        # Unblock signals
-        widget.options_combo.blockSignals(False)
+        # View button
+        self.view_table_button = QPushButton("View")
+        self.view_table_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
+            }
+            QPushButton:disabled {
+                background-color: #6c757d;
+                color: #ced4da;
+            }
+        """)
+        self.view_table_button.clicked.connect(self.view_selected_table)
+        self.view_table_button.setEnabled(False)  # Disabled until a table is selected
+        layout.addWidget(self.view_table_button)
         
-        # Update placeholder
-        self.update_placeholder(widget, content_type)
+        # Connect table combo changes to enable/disable button
+        self.table_combo.currentTextChanged.connect(self.on_table_selection_changed)
         
-    def on_option_changed(self, widget, option_name):
-        """Handle option selection change"""
-        # Handle empty or None option names
-        if not option_name or option_name == "None":
-            self.update_placeholder(widget, widget.type_combo.currentText())
+        return widget
+        
+    def on_plot_changed(self, plot_name):
+        """Handle plot selection change"""
+        # Handle empty or None plot names
+        if not plot_name or plot_name == "None":
+            self.clear_plot_area()
             return
             
-        content_type = widget.type_combo.currentText()
-        
-        if content_type == "Plot":
-            self.display_plot(widget, option_name)
-        elif content_type == "Table":
-            self.display_table(widget, option_name)
-            
-    def clear_content_area(self, content_area):
-        """Clear all content from a content area"""
-        # Clear existing content
-        for i in reversed(range(content_area.layout().count())):
-            item = content_area.layout().itemAt(i)
-            if item.widget():
-                item.widget().setParent(None)
-            elif item.layout():
-                # Clear nested layout
-                for j in reversed(range(item.layout().count())):
-                    nested_item = item.layout().itemAt(j)
-                    if nested_item.widget():
-                        nested_item.widget().setParent(None)
-                # Remove the layout itself
-                content_area.layout().removeItem(item)
-        
-    def update_placeholder(self, widget, content_type):
-        """Update placeholder text in content area"""
-        # Clear existing content from canvas layout
-        for i in reversed(range(widget.canvas_layout.count())):
-            item = widget.canvas_layout.itemAt(i)
-            if item.widget():
-                item.widget().setParent(None)
-        
-        # Remove old toolbar if it exists (from previous plot)
-        if hasattr(widget, 'plot_toolbar') and widget.plot_toolbar is not None:
-            widget.bottom_layout.removeWidget(widget.plot_toolbar)
-            widget.plot_toolbar.setParent(None)
-            # Use a short delay to let pending events finish before deletion.
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, widget.plot_toolbar.deleteLater)
-            widget.plot_toolbar = None
-        
-        # Show/hide save button and DPI controls based on content type
-        if content_type == "Plot":
-            # Show save button and DPI controls for plots
-            widget.save_button.setVisible(True)
-            widget.dpi_input.setVisible(True)
-            # Find and show the DPI label
-            for i in range(widget.bottom_layout.count()):
-                item = widget.bottom_layout.itemAt(i)
-                if item.widget() and hasattr(item.widget(), 'text') and item.widget().text() == "DPI:":
-                    item.widget().setVisible(True)
-                    break
+        # Display the selected plot
+        self.display_plot(plot_name)
+    
+    def on_table_selection_changed(self, table_name):
+        """Handle table selection change - enables/disables view button"""
+        if table_name and table_name != "None":
+            self.view_table_button.setEnabled(True)
         else:
-            # Hide save button and DPI controls for tables
-            widget.save_button.setVisible(False)
-            widget.dpi_input.setVisible(False)
-            # Find and hide the DPI label
-            for i in range(widget.bottom_layout.count()):
-                item = widget.bottom_layout.itemAt(i)
-                if item.widget() and hasattr(item.widget(), 'text') and item.widget().text() == "DPI:":
-                    item.widget().setVisible(False)
-                    break
+            self.view_table_button.setEnabled(False)
+    
+    def view_selected_table(self):
+        """Open modal to view the selected table"""
+        table_name = self.table_combo.currentText()
+        if not table_name or table_name == "None":
+            return
         
-        # Add new placeholder
-        placeholder = QLabel(f"Select a {content_type} to display content")
+        try:
+            # Get table data
+            table_data = self.parent.visualization_results["tables"][table_name]
+            
+            # Create and show modal dialog
+            dialog = TableViewDialog(table_data, table_name, parent=self)
+            dialog.exec_()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to display table:\n{str(e)}")
+            
+    def clear_plot_area(self):
+        """Clear the plot area and show placeholder"""
+        # Clear existing content from canvas layout
+        for i in reversed(range(self.canvas_layout.count())):
+            item = self.canvas_layout.itemAt(i)
+            if item.widget():
+                item.widget().setParent(None)
+        
+        # Remove old toolbar if it exists
+        if self.plot_toolbar is not None:
+            self.bottom_layout.removeWidget(self.plot_toolbar)
+            self.plot_toolbar.setParent(None)
+            QTimer.singleShot(0, self.plot_toolbar.deleteLater)
+            self.plot_toolbar = None
+        
+        # Clear canvas reference
+        if self.canvas is not None:
+            self.canvas.setParent(None)
+            self.canvas.deleteLater()
+            self.canvas = None
+        
+        self.current_figure = None
+        
+        # Add placeholder
+        placeholder = QLabel("Select a Plot to display")
         placeholder.setAlignment(Qt.AlignCenter)
         placeholder.setStyleSheet("""
             QLabel {
@@ -1780,194 +2262,56 @@ class DataAnalysisWidget(QWidget):
                 font-size: 12px;
             }
         """)
-        widget.canvas_layout.addWidget(placeholder)
+        self.canvas_layout.addWidget(placeholder)
         
 
-    def display_plot(self, widget, plot_name):
+    def display_plot(self, plot_name):
+        """Display the selected plot"""
         try:
             fig = self.parent.visualization_results["plots"][plot_name]
+            self.current_figure = fig
 
-            # Clear any previous font size storage to ensure fresh scaling
-            if hasattr(fig, '_original_font_sizes'):
-                delattr(fig, '_original_font_sizes')
-
-            # prefer constrained layout; fallback if older MPL
-            try:
-                fig.set_layout_engine('constrained')
-            except Exception:
-                fig.set_constrained_layout(True)
-
-            # clear previous canvas/widgets
-            for i in reversed(range(widget.canvas_layout.count())):
-                item = widget.canvas_layout.itemAt(i)
+            # Clear previous canvas/widgets
+            for i in reversed(range(self.canvas_layout.count())):
+                item = self.canvas_layout.itemAt(i)
                 if w := item.widget():
                     w.setParent(None)
 
-            if hasattr(widget, 'canvas') and widget.canvas is not None:
-                widget.canvas.setParent(None)
-                widget.canvas.deleteLater()
+            if self.canvas is not None:
+                self.canvas.setParent(None)
+                self.canvas.deleteLater()
 
-            # create canvas *then* size by resizeEvent
-            widget.canvas = ResponsiveCanvas(fig, self)  # Pass DataAnalysisWidget as parent
-            widget.canvas.setContentsMargins(0, 0, 0, 0)
-            widget.canvas_layout.setContentsMargins(0, 0, 0, 0)
-            widget.canvas_layout.setSpacing(0)
-            widget.canvas_layout.addWidget(widget.canvas)
+            # Create simple canvas without responsive features
+            self.canvas = FigureCanvas(fig)
+            self.canvas.setContentsMargins(0, 0, 0, 0)
+            self.canvas_layout.setContentsMargins(0, 0, 0, 0)
+            self.canvas_layout.setSpacing(0)
+            self.canvas_layout.addWidget(self.canvas)
 
-            if getattr(widget, 'plot_toolbar', None):
-                widget.bottom_layout.removeWidget(widget.plot_toolbar)
-                widget.plot_toolbar.setParent(None)
-                widget.plot_toolbar.deleteLater()
+            # Update toolbar
+            if self.plot_toolbar is not None:
+                self.bottom_layout.removeWidget(self.plot_toolbar)
+                self.plot_toolbar.setParent(None)
+                self.plot_toolbar.deleteLater()
 
-            widget.plot_toolbar = SafeNavigationToolbar(widget.canvas, widget)
-            widget.bottom_layout.insertWidget(0, widget.plot_toolbar)
+            self.plot_toolbar = SafeNavigationToolbar(self.canvas, self)
+            self.bottom_layout.insertWidget(0, self.plot_toolbar)
 
-            widget.save_button.setVisible(True)
-            widget.dpi_input.setVisible(True)
-
-            try:
-                widget.save_button.clicked.disconnect()
-            except Exception:
-                pass
-            widget.save_button.clicked.connect(lambda: self.save_figure(fig, widget.dpi_input.value()))
-
-            # Ensure proper initial sizing and layout
-            widget.canvas.draw_idle()
-            
-            # Force immediate resize to fit the current container size
-            self.resize_plot_to_fit_area(widget)
-            
-            # Additional delayed resize to handle any layout changes
-            QTimer.singleShot(10, lambda: self.resize_plot_to_fit_area(widget))
-            QTimer.singleShot(100, lambda: self.resize_plot_to_fit_area(widget))
+            # Draw the plot
+            self.canvas.draw()
 
         except Exception as e:
             err = QLabel(f"Error displaying plot: {e}")
             err.setAlignment(Qt.AlignCenter)
             err.setStyleSheet("color:#dc3545;")
-            widget.canvas_layout.addWidget(err)
+            self.canvas_layout.addWidget(err)
             
-    def display_table(self, widget, table_name):
-        """Display a table with scrollable content"""
-        try:
-            # Get table data
-            table_data = self.parent.visualization_results["tables"][table_name]
-            
-            # Clear existing content from canvas layout
-            for i in reversed(range(widget.canvas_layout.count())):
-                item = widget.canvas_layout.itemAt(i)
-                if item.widget():
-                    item.widget().setParent(None)
-            
-            # Remove old toolbar if it exists (from previous plot)
-            if hasattr(widget, 'plot_toolbar') and widget.plot_toolbar is not None:
-                widget.bottom_layout.removeWidget(widget.plot_toolbar)
-                widget.plot_toolbar.setParent(None)
-                # Use a short delay to let pending events finish before deletion.
-                QTimer.singleShot(0, widget.plot_toolbar.deleteLater)
-                widget.plot_toolbar = None
-            
-            # Hide save button and DPI controls for tables
-            widget.save_button.setVisible(False)
-            widget.dpi_input.setVisible(False)
-            # Find and hide the DPI label
-            for i in range(widget.bottom_layout.count()):
-                item = widget.bottom_layout.itemAt(i)
-                if item.widget() and hasattr(item.widget(), 'text') and item.widget().text() == "DPI:":
-                    item.widget().setVisible(False)
-                    break
-            
-            # Create table widget
-            table_widget = QTableWidget()
-            table_widget.setStyleSheet("""
-                QTableWidget {
-                    background-color: white;
-                    border: 1px solid #ced4da;
-                    border-radius: 4px;
-                    color: #495057;
-                    font-size: 11px;
-                    gridline-color: #f8f9fa;
-                }
-                QTableWidget::item {
-                    padding: 4px;
-                    border-bottom: 1px solid #f8f9fa;
-                }
-                QTableWidget::item:selected {
-                    background-color: #e3f2fd;
-                    color: #495057;
-                }
-                QTableWidget::item:alternate {
-                    background-color: #f8f9fa;
-                }
-                QHeaderView::section {
-                    background-color: #f8f9fa;
-                    border: 1px solid #dee2e6;
-                    padding: 4px;
-                    font-weight: bold;
-                    color: #495057;
-                }
-            """)
-            
-            # Hide row headers (row index)
-            table_widget.verticalHeader().setVisible(False)
-            
-            # Populate table
-            if isinstance(table_data, pd.DataFrame):
-                # Set dimensions
-                table_widget.setRowCount(len(table_data))
-                table_widget.setColumnCount(len(table_data.columns))
-                
-                # Set headers
-                table_widget.setHorizontalHeaderLabels(table_data.columns)
-                
-                # Populate data
-                for i in range(len(table_data)):
-                    for j in range(len(table_data.columns)):
-                        item = QTableWidgetItem(str(table_data.iloc[i, j]))
-                        table_widget.setItem(i, j, item)
-                        
-            elif isinstance(table_data, (list, tuple)):
-                # Handle list/tuple data
-                if table_data and isinstance(table_data[0], (list, tuple)):
-                    # 2D data
-                    table_widget.setRowCount(len(table_data))
-                    table_widget.setColumnCount(len(table_data[0]))
-                    
-                    for i, row in enumerate(table_data):
-                        for j, value in enumerate(row):
-                            item = QTableWidgetItem(str(value))
-                            table_widget.setItem(i, j, item)
-                else:
-                    # 1D data
-                    table_widget.setRowCount(len(table_data))
-                    table_widget.setColumnCount(1)
-                    
-                    for i, value in enumerate(table_data):
-                        item = QTableWidgetItem(str(value))
-                        table_widget.setItem(i, 0, item)
-            
-            # Enable alternating row colors
-            table_widget.setAlternatingRowColors(True)
-            
-            # Enable scrolling
-            table_widget.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-            table_widget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-            
-            # Auto-resize columns
-            table_widget.resizeColumnsToContents()
-            
-            # Add to layout
-            widget.canvas_layout.addWidget(table_widget)
-            
-        except Exception as e:
-            # Show error message
-            error_label = QLabel(f"Error displaying table: {str(e)}")
-            error_label.setAlignment(Qt.AlignCenter)
-            error_label.setStyleSheet("color: #dc3545; font-size: 11px;")
-            widget.content_area.layout().addWidget(error_label)
-            
-    def save_figure(self, fig, dpi):
-        """Save the current figure"""
+    def save_current_figure(self):
+        """Save the currently displayed figure"""
+        if self.current_figure is None:
+            QMessageBox.warning(self, "No Plot", "No plot is currently displayed.")
+            return
+        
         try:
             file_path, _ = QFileDialog.getSaveFileName(
                 self, 
@@ -1976,20 +2320,37 @@ class DataAnalysisWidget(QWidget):
                 "PNG Files (*.png);;PDF Files (*.pdf);;SVG Files (*.svg);;All Files (*.*)"
             )
             if file_path:
-                fig.savefig(file_path, dpi=dpi, bbox_inches='tight')
+                dpi = self.dpi_input.value()
+                self.current_figure.savefig(file_path, dpi=dpi, bbox_inches='tight')
                 QMessageBox.information(self, "Success", f"Figure saved successfully to {file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save figure: {str(e)}")
             
     def update_visualization_data(self, visualization_results):
-        """Update visualization data and refresh all content areas"""
+        """Update visualization data and refresh dropdown options"""
         self.visualization_data = visualization_results
         
-        # Find all content areas and update their options
-        for child in self.findChildren(QWidget):
-            if hasattr(child, 'area_id') and hasattr(child, 'type_combo'):
-                current_type = child.type_combo.currentText()
-                self.on_type_changed(child, current_type)
+        # Block signals temporarily
+        self.plot_combo.blockSignals(True)
+        self.table_combo.blockSignals(True)
+        
+        # Update plot combo
+        self.plot_combo.clear()
+        self.plot_combo.addItem("None")
+        if "plots" in visualization_results:
+            for plot_name in visualization_results["plots"].keys():
+                self.plot_combo.addItem(plot_name)
+        
+        # Update table combo
+        self.table_combo.clear()
+        self.table_combo.addItem("None")
+        if "tables" in visualization_results:
+            for table_name in visualization_results["tables"].keys():
+                self.table_combo.addItem(table_name)
+        
+        # Unblock signals
+        self.plot_combo.blockSignals(False)
+        self.table_combo.blockSignals(False)
                 
     def get_data_dict(self) -> Dict[str, Any]:
         """Get the current data dictionary"""
@@ -2008,231 +2369,9 @@ class DataAnalysisWidget(QWidget):
         # This method is now handled directly in the main window
         pass
     
-    def _get_screen_dpi_factor(self):
-        """Get DPI scaling factor for the current screen"""
-        try:
-            from PySide6.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app:
-                screen = app.primaryScreen()
-                if screen:
-                    # Get logical DPI and physical DPI
-                    logical_dpi = screen.logicalDotsPerInch()
-                    physical_dpi = screen.physicalDotsPerInch()
-                    # Calculate scaling factor (typically 1.0, 1.25, 1.5, 2.0 for Windows)
-                    dpi_factor = logical_dpi / 96.0  # 96 is standard Windows DPI
-                    return max(0.75, min(2.0, dpi_factor))  # Clamp between 0.75 and 2.0
-        except Exception:
-            pass
-        return 1.0  # Default fallback
+    def update_data_editing_files(self):
+        """Update the file list in the data editing widget"""
+        if hasattr(self, 'data_editing_widget') and hasattr(self.parent, 'input_data_widget'):
+            data_dict = self.parent.input_data_widget.get_data_dict()
+            self.data_editing_widget.update_file_list(data_dict)
     
-    def _get_screen_size_category(self):
-        """Determine screen size category for appropriate scaling"""
-        try:
-            from PySide6.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app:
-                screen = app.primaryScreen()
-                if screen:
-                    geometry = screen.availableGeometry()
-                    width = geometry.width()
-                    height = geometry.height()
-                    
-                    # Calculate diagonal size in inches (rough estimate)
-                    dpi = screen.logicalDotsPerInch()
-                    diag_pixels = (width**2 + height**2)**0.5
-                    diag_inches = diag_pixels / dpi
-                    
-                    if diag_inches < 15:
-                        return "small"  # Small laptops/tablets
-                    elif diag_inches < 20:
-                        return "medium"  # Standard laptops
-                    else:
-                        return "large"  # Desktop monitors
-        except Exception:
-            pass
-        return "medium"  # Default fallback
-    
-    def _store_original_font_sizes(self, fig):
-        """Store original font sizes to prevent cumulative scaling"""
-        if not hasattr(fig, '_original_font_sizes'):
-            fig._original_font_sizes = {}
-            
-        for i, ax in enumerate(fig.get_axes()):
-            ax_key = f"ax_{i}"
-            if ax_key not in fig._original_font_sizes:
-                fig._original_font_sizes[ax_key] = {}
-                
-                # Store original font sizes
-                if ax.title and ax.title.get_text():
-                    fig._original_font_sizes[ax_key]['title'] = ax.title.get_fontsize()
-                if ax.xaxis.label:
-                    fig._original_font_sizes[ax_key]['xlabel'] = ax.xaxis.label.get_fontsize()
-                if ax.yaxis.label:
-                    fig._original_font_sizes[ax_key]['ylabel'] = ax.yaxis.label.get_fontsize()
-                    
-                # Store tick label sizes
-                x_lbls = ax.xaxis.get_ticklabels()
-                y_lbls = ax.yaxis.get_ticklabels()
-                if x_lbls:
-                    fig._original_font_sizes[ax_key]['xtick'] = x_lbls[0].get_size()
-                if y_lbls:
-                    fig._original_font_sizes[ax_key]['ytick'] = y_lbls[0].get_size()
-                    
-                # Store legend font sizes
-                leg = ax.get_legend()
-                if leg is not None:
-                    fig._original_font_sizes[ax_key]['legend'] = []
-                    for txt in leg.get_texts():
-                        fig._original_font_sizes[ax_key]['legend'].append(txt.get_fontsize())
-                    if leg.get_title() is not None:
-                        fig._original_font_sizes[ax_key]['legend_title'] = leg.get_title().get_fontsize()
-
-    def _scale_figure_style(self, fig, target_px, base_px=None, min_scale=0.8, max_scale=1.4, alpha=0.7):
-        """Improved scaling that prevents cumulative scaling and adapts to screen size"""
-        # Store original font sizes on first call
-        self._store_original_font_sizes(fig)
-        
-        # Get screen DPI factor and size category
-        dpi_factor = self._get_screen_dpi_factor()
-        screen_category = self._get_screen_size_category()
-        
-        # Adjust base_px based on screen size and DPI
-        if base_px is None:
-            # Base pixel size should be adjusted for screen size
-            if screen_category == "small":
-                base_px = 500  # Small screens (15" laptops, etc.)
-            elif screen_category == "medium":
-                base_px = 700  # Medium screens (standard laptops)
-            else:
-                base_px = 1000  # Large screens (desktop monitors)
-                
-        # Apply DPI factor to base_px
-        base_px = base_px / dpi_factor
-        
-        # Adjust scaling parameters based on screen size
-        if screen_category == "small":
-            # More conservative scaling for small screens
-            alpha = 0.6
-            min_scale = 0.8
-            max_scale = 1.3
-        elif screen_category == "medium":
-            # Balanced scaling for medium screens
-            alpha = 0.7
-            min_scale = 0.8
-            max_scale = 1.4
-        else:
-            # More aggressive scaling for large screens
-            alpha = 0.8
-            min_scale = 0.7
-            max_scale = 1.5
-        
-        # Calculate scaling factor
-        raw = (max(1.0, float(target_px)) / float(base_px)) ** alpha
-        s = max(min_scale, min(max_scale, raw))
-
-        for i, ax in enumerate(fig.get_axes()):
-            ax_key = f"ax_{i}"
-            original_sizes = fig._original_font_sizes.get(ax_key, {})
-            
-            # Apply scaling to titles and labels
-            if 'title' in original_sizes:
-                ax.title.set_fontsize(original_sizes['title'] * s)
-            if 'xlabel' in original_sizes:
-                ax.xaxis.label.set_fontsize(original_sizes['xlabel'] * s)
-            if 'ylabel' in original_sizes:
-                ax.yaxis.label.set_fontsize(original_sizes['ylabel'] * s)
-
-            # Apply scaling to tick labels with minimum size protection
-            if 'xtick' in original_sizes:
-                # Adjust minimum size based on screen category
-                min_tick_size = 6 if screen_category == "small" else 8
-                new_size = max(min_tick_size, original_sizes['xtick'] * s)
-                ax.tick_params(axis='x', which='major', labelsize=new_size)
-                ax.tick_params(axis='x', which='minor', labelsize=max(4, new_size * 0.85))
-            if 'ytick' in original_sizes:
-                # Adjust minimum size based on screen category
-                min_tick_size = 6 if screen_category == "small" else 8
-                new_size = max(min_tick_size, original_sizes['ytick'] * s)
-                ax.tick_params(axis='y', which='major', labelsize=new_size)
-                ax.tick_params(axis='y', which='minor', labelsize=max(4, new_size * 0.85))
-
-            # Scale line properties
-            for line in ax.lines:
-                lw = line.get_linewidth()
-                if lw is not None:
-                    line.set_linewidth(max(0.7, lw * s))
-                ms = line.get_markersize()
-                if ms is not None:
-                    line.set_markersize(max(2.8, ms * s))
-
-            # Scale legend with minimum size protection
-            leg = ax.get_legend()
-            if leg is not None and 'legend' in original_sizes:
-                legend_sizes = original_sizes['legend']
-                # Adjust minimum legend size based on screen category
-                min_legend_size = 7 if screen_category == "small" else 9
-                for j, txt in enumerate(leg.get_texts()):
-                    if j < len(legend_sizes):
-                        new_size = max(min_legend_size, legend_sizes[j] * s)
-                        txt.set_fontsize(new_size)
-                if 'legend_title' in original_sizes:
-                    min_title_size = 8 if screen_category == "small" else 10
-                    title_size = max(min_title_size, original_sizes['legend_title'] * s)
-                    leg.get_title().set_fontsize(title_size)
-
-    def resize_plot_to_fit_area(self, widget):
-        """Resize plot to fit the available area with proper error handling"""
-        if not getattr(widget, 'canvas', None):
-            return
-        try:
-            fig = widget.canvas.figure
-            W  = widget.canvas_container.width()
-            H  = widget.canvas_container.height()
-            if W <= 0 or H <= 0:
-                return
-
-            dpi = fig.get_dpi()                 # keep logical dpi as-is
-            w_in = max(4.0, W / dpi)
-            h_in = max(3.0, H / dpi)
-            fig.set_size_inches(w_in, h_in, forward=True)
-
-            # Improved style scaling with screen-aware parameters
-            self._scale_figure_style(fig, W, base_px=None, min_scale=0.7, max_scale=1.5)
-            widget.canvas.draw_idle()
-        except Exception as e:
-            # Silently handle resize errors to prevent crashes
-            print(f"Resize error: {e}")
-    
-    def resize_all_plots(self):
-        """Resize all plots in all content areas"""
-        for child in self.findChildren(QWidget):
-            if hasattr(child, 'area_id') and hasattr(child, 'canvas') and child.canvas is not None:
-                self.resize_plot_to_fit_area(child)
-    
-    def debug_scaling_info(self):
-        """Debug method to print scaling information"""
-        dpi_factor = self._get_screen_dpi_factor()
-        screen_category = self._get_screen_size_category()
-        print(f"Screen DPI Factor: {dpi_factor}")
-        print(f"Screen Category: {screen_category}")
-        
-        # Find a plot to analyze
-        for child in self.findChildren(QWidget):
-            if hasattr(child, 'canvas') and child.canvas is not None:
-                W = child.canvas_container.width()
-                H = child.canvas_container.height()
-                print(f"Plot container size: {W}x{H}")
-                
-                if screen_category == "small":
-                    base_px = 500
-                elif screen_category == "medium":
-                    base_px = 700
-                else:
-                    base_px = 1000
-                    
-                adjusted_base = base_px / dpi_factor
-                raw = (max(1.0, float(W)) / float(adjusted_base)) ** 0.7
-                scale = max(0.8, min(1.4, raw))
-                print(f"Calculated scale factor: {scale}")
-                break

@@ -8,15 +8,16 @@ from scipy.signal import spectrogram
 
 
 def plot_eeg_data(eeg_data):
-    fig, ax = plt.subplots(1, 1, figsize=(3, 0.5))
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
     for eeg_marker in eeg_data['raw_data']:
         ax.plot(eeg_data['time'], eeg_data['raw_data'][eeg_marker], label=eeg_marker)
     ax.legend()
+    plt.tight_layout()
     return fig
 
 
 def plot_imu_data(imu_data):
-    fig, ax = plt.subplots(1, 2, figsize=(4, 3))
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
     ax[0].set_title('Accelerometer Data')
     ax[1].set_title('Gyroscope Data')
     for axis in ['x', 'y', 'z']:
@@ -24,38 +25,42 @@ def plot_imu_data(imu_data):
         ax[1].plot(imu_data['time'], imu_data['raw_data'][f'Gyro{axis.upper()}'], label=f'Gyro{axis.upper()}')
     ax[0].legend()
     ax[1].legend()
+    plt.tight_layout()
     return fig
 
 
 def plot_eeg_psd_data(eeg_data):
-    fig, ax = plt.subplots(1, 1, figsize=(5, 3))
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
     freqs = eeg_data['psd_freq']
     for marker, psd in eeg_data['psd_data'].items():
         ax.plot(freqs, psd, label=marker)
     ax.set_xlabel('Frequency (Hz)')
     ax.set_ylabel('PSD (µV²/Hz)')
     ax.legend()
+    plt.tight_layout()
     return fig
 
 
 def plot_filtered_array(eeg_array, time, ch_names):
-    fig, ax = plt.subplots(1, 1, figsize=(5, 3))
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
     for i, name in enumerate(ch_names):
         ax.plot(time, eeg_array[i], label=name)
         ax.legend()
+    plt.tight_layout()
     return fig
 
 
 def plot_rereferenced_signals(reref_dict, time):
-    fig, ax = plt.subplots(1, 1, figsize=(5, 3))
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
     for k, v in reref_dict.items():
         ax.plot(time, v, label=k)
         ax.legend()
+    plt.tight_layout()
     return fig
 
 
 def plot_clean_mask(time, reref_signals, mask):
-    fig, ax = plt.subplots(reref_signals.shape[0], 1, figsize=(8, 4), sharex=True)
+    fig, ax = plt.subplots(reref_signals.shape[0], 1, figsize=(8, 6), sharex=True)
     for i in range(reref_signals.shape[0]):
         ax[i].plot(time, reref_signals[i], lw=0.6)
         ax[i].set_ylabel(f"Chan {i+1}")
@@ -63,17 +68,19 @@ def plot_clean_mask(time, reref_signals, mask):
             if not mask[j]:
                 ax[i].axvspan(time[j], time[min(j+1, len(time)-1)], color='red', alpha=0.2)
     ax[-1].set_xlabel("Time (s)")
+    plt.tight_layout()
     return fig
 
 
 
 def plot_spectrogram(data, fs, title):
-    fig, ax = plt.subplots(figsize=(5, 3))
+    fig, ax = plt.subplots(figsize=(8, 4))
     f, t, Sxx = spectrogram(data, fs=fs, nperseg=fs*2, noverlap=fs, window='hann')
     ax.pcolormesh(t, f, 10*np.log10(Sxx), shading='gouraud')
     ax.set_ylabel('Frequency [Hz]')
     ax.set_xlabel('Time [sec]')
     ax.set_title(title)
+    plt.tight_layout()
     return fig
 
 

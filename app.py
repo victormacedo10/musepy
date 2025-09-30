@@ -10,15 +10,7 @@ from typing import Dict, Any
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel
 from PySide6.QtGui import QIcon, QPalette, QColor
 import matplotlib
-matplotlib.use("Qt5Agg")              # match the working script
-import matplotlib as mpl
-mpl.rcParams.update({
-    "figure.dpi": 120,                # logical DPI only (QtAgg will upscale for HiDPI)
-    "path.snap": True,                # crisper ticks/spines on fractional scales
-    "axes.linewidth": 0.8,
-    "xtick.major.width": 0.8,
-    "ytick.major.width": 0.8,
-})
+matplotlib.use("Qt5Agg")
 # Import our custom modules
 from src.data_collection.data_collection_widget import DataCollectionWidget
 from src.data_analysis.data_analysis_widget import (DataAnalysisWidget, InputDataWidget, ProcessingWidget, 
@@ -330,6 +322,10 @@ class MusePyApp(QMainWindow):
         if hasattr(self, 'variable_inspector'):
             data_dict = self.get_combined_data_dict()
             self.variable_inspector.update_data(data_dict)
+        
+        # Update the data editing widget file list
+        if hasattr(self, 'data_analysis_widget'):
+            self.data_analysis_widget.update_data_editing_files()
             
     def on_data_file_deleted(self, file_id: str):
         """Handle data file deleted event"""
@@ -337,6 +333,10 @@ class MusePyApp(QMainWindow):
         if hasattr(self, 'variable_inspector'):
             data_dict = self.get_combined_data_dict()
             self.variable_inspector.update_data(data_dict)
+        
+        # Update the data editing widget file list
+        if hasattr(self, 'data_analysis_widget'):
+            self.data_analysis_widget.update_data_editing_files()
             
     def on_visualization_executed(self, script_id: str):
         """Handle visualization execution event"""
