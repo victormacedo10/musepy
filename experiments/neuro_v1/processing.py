@@ -18,8 +18,10 @@ def processing_function(input_dict):
         return {"error": "No muse data found"}
     eeg_time = muse_data['eeg']['timestamp'] - muse_data['eeg']['timestamp'][0]
     imu_time = muse_data['imu']['timestamp'] - muse_data['imu']['timestamp'][0]
+    ppg_time = muse_data['ppg']['timestamp'] - muse_data['ppg']['timestamp'][0]
     results = {'eeg': {'raw_data': {}, 'time': eeg_time}, 
-                'imu': {'raw_data': {}, 'time': imu_time}}
+                'imu': {'raw_data': {}, 'time': imu_time},
+                'ppg': {'raw_data': {}, 'time': ppg_time}}
 
     if 'imu' in muse_data:
         for imu_marker in ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ']:

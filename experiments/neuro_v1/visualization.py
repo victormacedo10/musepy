@@ -29,6 +29,15 @@ def plot_imu_data(imu_data):
     return fig
 
 
+def plot_ppg_data(ppg_data):
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
+    ax.plot(ppg_data['time'], ppg_data['raw_data']['PPG_1'], label='PPG_1')
+    ax.plot(ppg_data['time'], ppg_data['raw_data']['PPG_2'], label='PPG_2')
+    ax.legend()
+    plt.tight_layout()
+    return fig
+
+
 def plot_eeg_psd_data(eeg_data):
     fig, ax = plt.subplots(1, 1, figsize=(8, 4))
     freqs = eeg_data['psd_freq']
@@ -90,6 +99,7 @@ def visualization_function(inputs_dict, processing_dict):
     output = {"plots": {}, "tables": {}}
     output["plots"]['Raw EEG Channels'] = plot_eeg_data(processing_dict['eeg'])
     output["plots"]['Raw IMU Channels'] = plot_imu_data(processing_dict['imu'])
+    output["plots"]['Raw PPG Channels'] = plot_ppg_data(processing_dict['ppg'])
     output["plots"]['EEG PSD Spectrum'] = plot_eeg_psd_data(processing_dict['eeg'])
 
 
