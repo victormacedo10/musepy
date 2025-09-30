@@ -293,6 +293,10 @@ class MusePyApp(QMainWindow):
                 analysis_layout.setContentsMargins(0, 0, 0, 0)
                 analysis_layout.setSpacing(0)
                 
+                # Initialize result storage attributes
+                self.processing_results = {}
+                self.visualization_results = {}
+                
                 # Create InputDataWidget
                 self.input_data_widget = InputDataWidget(parent=self)
                 analysis_layout.addWidget(self.input_data_widget)
@@ -338,11 +342,9 @@ class MusePyApp(QMainWindow):
         """Handle visualization execution event"""
         # Update the data analysis widget with new visualization data
         if hasattr(self, 'data_analysis_widget'):
-            # Get visualization results from the visualization widget
-            if hasattr(self, 'visualization_widget'):
-                visualization_data = self.visualization_widget.get_visualization_results()
-                if visualization_data:
-                    self.data_analysis_widget.update_visualization_data(visualization_data)
+            # Get visualization results from the main window (stored directly)
+            if hasattr(self, 'visualization_results') and self.visualization_results:
+                self.data_analysis_widget.update_visualization_data(self.visualization_results)
             
 
             
@@ -358,17 +360,13 @@ class MusePyApp(QMainWindow):
         if hasattr(self, 'input_data_widget'):
             combined_dict["input"] = self.input_data_widget.get_data_dict()
             
-        # Add processing results
-        if hasattr(self, 'processing_widget'):
-            processing_data = self.processing_widget.get_processing_results()
-            if processing_data:
-                combined_dict["processing"] = processing_data
+        # Add processing results (stored directly on main window)
+        if hasattr(self, 'processing_results') and self.processing_results:
+            combined_dict["processing"] = self.processing_results
             
-        # Add visualization results
-        if hasattr(self, 'visualization_widget'):
-            visualization_data = self.visualization_widget.get_visualization_results()
-            if visualization_data:
-                combined_dict["visualization"] = visualization_data
+        # Add visualization results (stored directly on main window)
+        if hasattr(self, 'visualization_results') and self.visualization_results:
+            combined_dict["visualization"] = self.visualization_results
             
         return combined_dict
     

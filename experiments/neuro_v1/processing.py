@@ -21,6 +21,22 @@ def processing_function(input_dict):
     results = {'eeg': {'raw_data': {}, 'time': eeg_time}, 
                 'imu': {'raw_data': {}, 'time': imu_time}}
 
+    if 'imu' in muse_data:
+        for imu_marker in ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ']:
+            if imu_marker in muse_data['imu']:
+                imu_channel = muse_data['imu'][imu_marker]
+                results['imu']['raw_data'][imu_marker] = imu_channel
+            else:
+                print(f'IMU marker {imu_marker} not found in the data')
+
+    if 'ppg' in muse_data:
+        for ppg_marker in ['PPG_1', 'PPG_2']:
+            if ppg_marker in muse_data['ppg']:
+                ppg_channel = muse_data['ppg'][ppg_marker]
+                results['ppg']['raw_data'][ppg_marker] = ppg_channel
+            else:
+                print(f'PPG channel {ppg_marker} not found in the data')
+
     fs = 256.0
     # Use this if you want to compute the sampling frequency from the time array
     # fs = int(round(1.0 / np.mean(np.diff(eeg_time))))
@@ -121,10 +137,6 @@ def processing_function(input_dict):
             band: np.trapezoid(psd[(f >= low) & (f <= high)], f[(f >= low) & (f <= high)])
             for band, (low, high) in bands.items()
         }
-
-    for imu_marker in ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ']:
-        imu_channel = muse_data['imu'][imu_marker]
-        results['imu']['raw_data'][imu_marker] = imu_channel
 
     return results
 
