@@ -849,6 +849,15 @@ class ProcessingWidget(QGroupBox):
         if script_path != "Default" and not os.path.exists(script_path):
             QMessageBox.warning(self, "File Error", "Script file does not exist.")
             return
+        
+        # Clear processing results before applying new processing
+        if hasattr(self.parent, 'processing_results'):
+            self.parent.processing_results = {}
+            
+        # Update variable inspector to reflect cleared processing data
+        if hasattr(self.parent, 'variable_inspector'):
+            data_dict = self.parent.get_combined_data_dict()
+            self.parent.variable_inspector.update_data(data_dict)
             
         # Auto-generate script ID from filename
         if script_path == "Default":
@@ -1071,6 +1080,19 @@ class VisualizationWidget(QGroupBox):
         if script_path != "Default" and not os.path.exists(script_path):
             QMessageBox.warning(self, "File Error", "Script file does not exist.")
             return
+        
+        # Clear visualization results before applying new visualization
+        if hasattr(self.parent, 'visualization_results'):
+            self.parent.visualization_results = {}
+            
+        # Update visualization widget dropdowns to reflect cleared data
+        if hasattr(self.parent, 'data_analysis_widget'):
+            self.parent.data_analysis_widget.update_visualization_data({})
+            
+        # Update variable inspector to reflect cleared visualization data
+        if hasattr(self.parent, 'variable_inspector'):
+            data_dict = self.parent.get_combined_data_dict()
+            self.parent.variable_inspector.update_data(data_dict)
             
         # Auto-generate script ID from filename
         if script_path == "Default":
@@ -1456,7 +1478,7 @@ class TableViewDialog(QDialog):
         table_widget.verticalHeader().setVisible(False)
         
         # Populate table based on data type
-        if isinstance(self.table_data, pd.DataFrame):
+        if isinstance(self.table_data, pd.DataFrame) or hasattr(self.table_data, 'columns'):
             # Set dimensions
             table_widget.setRowCount(len(self.table_data))
             table_widget.setColumnCount(len(self.table_data.columns))
@@ -1464,10 +1486,15 @@ class TableViewDialog(QDialog):
             # Set headers
             table_widget.setHorizontalHeaderLabels(self.table_data.columns)
             
-            # Populate data
+            # Populate data - use safe indexing for FastDataFrame compatibility
             for i in range(len(self.table_data)):
                 for j in range(len(self.table_data.columns)):
-                    value = self.table_data.iloc[i, j]
+                    try:
+                        # Try iloc first (pandas DataFrame)
+                        value = self.table_data.iloc[i, j]
+                    except AttributeError:
+                        # Fallback to direct indexing (FastDataFrame)
+                        value = self.table_data[self.table_data.columns[j]].iloc[i] if hasattr(self.table_data, 'iloc') else self.table_data[self.table_data.columns[j]][i]
                     item = QTableWidgetItem(str(value))
                     table_widget.setItem(i, j, item)
                     
@@ -1628,7 +1655,7 @@ class DataEditingWidget(QWidget):
         
         layout.addWidget(self.plot_widget)
         
-        # Buttons layout
+        # All buttons in one horizontal layout
         buttons_layout = QHBoxLayout()
         buttons_layout.addStretch()
         
@@ -1684,6 +1711,33 @@ class DataEditingWidget(QWidget):
         self.save_cropped_button.clicked.connect(self.save_cropped_data)
         buttons_layout.addWidget(self.save_cropped_button)
         
+        
+        # Remove Data button
+        self.remove_button = QPushButton("Remove Data")
+        self.remove_button.setEnabled(False)
+        self.remove_button.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+            QPushButton:disabled {
+                background-color: #6c757d;
+                color: #ced4da;
+            }
+        """)
+        self.remove_button.clicked.connect(self.remove_data)
+        buttons_layout.addWidget(self.remove_button)
+        
         layout.addLayout(buttons_layout)
         
     def update_file_list(self, file_dict):
@@ -1708,6 +1762,7 @@ class DataEditingWidget(QWidget):
             self.current_data = None
             self.apply_crop_button.setEnabled(False)
             self.save_cropped_button.setEnabled(False)
+            self.remove_button.setEnabled(False)
             return
         
         # Get data from parent
@@ -1719,10 +1774,12 @@ class DataEditingWidget(QWidget):
                 self.plot_data(self.current_data)
                 self.apply_crop_button.setEnabled(True)
                 self.save_cropped_button.setEnabled(True)
+                self.remove_button.setEnabled(True)
             else:
                 self.clear_plot()
                 self.apply_crop_button.setEnabled(False)
                 self.save_cropped_button.setEnabled(False)
+                self.remove_button.setEnabled(False)
         
     def plot_data(self, data):
         """Plot EEG data from the selected file"""
@@ -1733,17 +1790,62 @@ class DataEditingWidget(QWidget):
             
             eeg_data = data['eeg']
             
-            # Get time data
-            if 'timestamp' in eeg_data.columns:
-                time_data = (eeg_data['timestamp'] - eeg_data['timestamp'].min()).to_numpy()
+            # Handle different data formats
+            if hasattr(eeg_data, 'columns'):
+                # Pandas DataFrame format
+                # Get time data
+                if 'timestamp' in eeg_data.columns:
+                    time_data = np.array(eeg_data['timestamp'] - eeg_data['timestamp'].min())
+                else:
+                    time_data = np.arange(len(eeg_data))
+                
+                # Plot each channel
+                for channel in self.channel_names:
+                    if channel in eeg_data.columns:
+                        channel_data = eeg_data[channel].to_numpy()
+                        self.curves[channel].setData(time_data, channel_data)
+                        
+            elif isinstance(eeg_data, dict):
+                # Dictionary format (from .data files)
+                # Get time data
+                if 'timestamp' in eeg_data:
+                    timestamp = eeg_data['timestamp']
+                    if hasattr(timestamp, 'to_numpy'):
+                        time_data = (timestamp - timestamp.min()).to_numpy()
+                    else:
+                        # Already numpy array
+                        time_data = timestamp - timestamp.min()
+                else:
+                    # Estimate time based on first available channel
+                    first_channel = None
+                    for channel in self.channel_names:
+                        if channel in eeg_data:
+                            first_channel = channel
+                            break
+                    if first_channel:
+                        channel_data = eeg_data[first_channel]
+                        if hasattr(channel_data, '__len__'):
+                            time_data = np.arange(len(channel_data))
+                        else:
+                            time_data = np.array([0])
+                    else:
+                        time_data = np.array([0])
+                
+                # Plot each channel
+                for channel in self.channel_names:
+                    if channel in eeg_data:
+                        channel_data = eeg_data[channel]
+                        # Convert to numpy array if needed
+                        if hasattr(channel_data, 'to_numpy'):
+                            channel_array = channel_data.to_numpy()
+                        else:
+                            # Already numpy array or list
+                            channel_array = np.array(channel_data)
+                        self.curves[channel].setData(time_data, channel_array)
             else:
-                time_data = np.arange(len(eeg_data))
-            
-            # Plot each channel
-            for channel in self.channel_names:
-                if channel in eeg_data.columns:
-                    channel_data = eeg_data[channel].to_numpy()
-                    self.curves[channel].setData(time_data, channel_data)
+                QMessageBox.warning(self, "Unsupported Data Format", 
+                                  f"Unsupported EEG data format: {type(eeg_data)}")
+                return
             
             # Set crop region to full range initially
             if len(time_data) > 0:
@@ -1780,7 +1882,9 @@ class DataEditingWidget(QWidget):
                 if 'timestamp' in eeg_data.columns:
                     time_data = eeg_data['timestamp'] - eeg_data['timestamp'].min()
                     mask = (time_data >= crop_start) & (time_data <= crop_end)
-                    cropped_data['eeg'] = eeg_data[mask].reset_index(drop=True)
+                    # Use direct boolean indexing instead of .loc for FastDataFrame compatibility
+                    masked_data = eeg_data[mask]
+                    cropped_data['eeg'] = masked_data.reset_index(drop=True)
                 else:
                     cropped_data['eeg'] = eeg_data
             
@@ -1790,7 +1894,9 @@ class DataEditingWidget(QWidget):
                 if 'timestamp' in ppg_data.columns:
                     time_data = ppg_data['timestamp'] - ppg_data['timestamp'].min()
                     mask = (time_data >= crop_start) & (time_data <= crop_end)
-                    cropped_data['ppg'] = ppg_data[mask].reset_index(drop=True)
+                    # Use direct boolean indexing instead of .loc for FastDataFrame compatibility
+                    masked_data = ppg_data[mask]
+                    cropped_data['ppg'] = masked_data.reset_index(drop=True)
                 else:
                     cropped_data['ppg'] = ppg_data
             
@@ -1800,7 +1906,9 @@ class DataEditingWidget(QWidget):
                 if 'timestamp' in imu_data.columns:
                     time_data = imu_data['timestamp'] - imu_data['timestamp'].min()
                     mask = (time_data >= crop_start) & (time_data <= crop_end)
-                    cropped_data['imu'] = imu_data[mask].reset_index(drop=True)
+                    # Use direct boolean indexing instead of .loc for FastDataFrame compatibility
+                    masked_data = imu_data[mask]
+                    cropped_data['imu'] = masked_data.reset_index(drop=True)
                 else:
                     cropped_data['imu'] = imu_data
             
@@ -1896,6 +2004,52 @@ class DataEditingWidget(QWidget):
                 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save cropped data:\n{str(e)}")
+    
+    def remove_data(self):
+        """Remove the selected file from opened files and variable inspector"""
+        if self.current_file_id is None:
+            QMessageBox.warning(self, "No File Selected", "No file is currently selected.")
+            return
+        
+        try:
+            # Confirm removal
+            reply = QMessageBox.question(self, "Remove Data", 
+                                       f"Are you sure you want to remove '{self.current_file_id}' from the opened files?\n"
+                                       "This will also clear it from the Variable Inspector.",
+                                       QMessageBox.Yes | QMessageBox.No, 
+                                       QMessageBox.No)
+            
+            if reply == QMessageBox.Yes:
+                # Remove from input data widget
+                if hasattr(self.parent, 'input_data_widget'):
+                    if self.current_file_id in self.parent.input_data_widget.data_dict:
+                        del self.parent.input_data_widget.data_dict[self.current_file_id]
+                
+                # Store file_id for success message before clearing
+                removed_file_id = self.current_file_id
+                
+                # Clear current data
+                self.current_file_id = None
+                self.current_data = None
+                self.clear_plot()
+                
+                # Update file list dropdown
+                self.update_file_list(self.parent.input_data_widget.get_data_dict())
+                
+                # Update variable inspector
+                if hasattr(self.parent, 'variable_inspector'):
+                    data_dict = self.parent.get_combined_data_dict()
+                    self.parent.variable_inspector.update_data(data_dict)
+                
+                # Disable buttons
+                self.apply_crop_button.setEnabled(False)
+                self.save_cropped_button.setEnabled(False)
+                self.remove_button.setEnabled(False)
+                
+                QMessageBox.information(self, "Success", f"File '{removed_file_id}' has been removed.")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to remove data:\n{str(e)}")
 
 
 class DataAnalysisWidget(QWidget):

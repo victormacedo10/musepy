@@ -162,7 +162,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(current_dir / 'assets' / 'gd_logo.png') if (current_dir / 'assets' / 'gd_logo.png').exists() else None,
+    icon=str(current_dir / 'assets' / 'logo.png') if (current_dir / 'assets' / 'logo.png').exists() else None,
 )
 
 # Distribution

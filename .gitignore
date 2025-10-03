@@ -213,3 +213,6 @@ sessions/
 
 # VSCode
 .vscode/
+
+# Google Drive
+google_drive/

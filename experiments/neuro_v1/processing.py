@@ -1,6 +1,6 @@
 import numpy as np
 import pickle
-from scipy.signal import firwin, filtfilt, iirnotch, welch
+from scipy.signal import firwin, filtfilt, iirnotch, welch, coherence
 
 
 # ---- Main processing function ------------------------------------------------
@@ -39,13 +39,64 @@ def processing_function(input_dict):
             else:
                 print(f'PPG channel {ppg_marker} not found in the data')
 
+        ppg_signal = results['ppg']['raw_data']['PPG_2'].to_numpy()
+        ppg_time = results['ppg']['time']
+        ppg_fs = 64.0
+
+        # Bandpass filter (0.66–2 Hz) and optional notch at 50 Hz
+        bp_low = 0.66  # ~40 bpm
+        bp_high = 2.0  # ~120 bpm
+        bp_taps = firwin(numtaps=129, cutoff=[bp_low / (ppg_fs / 2), bp_high / (ppg_fs / 2)], pass_zero=False)
+
+        ppg_filtered = filtfilt(bp_taps, [1.0], ppg_signal)
+
+        # Sliding window FFT: 6 s window with 1 s step
+        window_len = int(6 * ppg_fs)
+        step_len = int(1 * ppg_fs)
+
+        hr_times = []
+        hr_values = []
+
+        for start in range(0, len(ppg_filtered) - window_len, step_len):
+            end = start + window_len
+            segment = ppg_filtered[start:end]
+
+            # Detrend (optional) and apply Hanning window
+            windowed = segment * np.hanning(window_len)
+
+            fft_vals = np.abs(np.fft.rfft(windowed))
+            fft_freqs = np.fft.rfftfreq(window_len, d=1/ppg_fs)
+
+            # Limit search to HR range
+            valid = (fft_freqs >= bp_low) & (fft_freqs <= bp_high)
+            if np.any(valid):
+                peak_freq = fft_freqs[valid][np.argmax(fft_vals[valid])]
+                hr_bpm = peak_freq * 60.0
+            else:
+                hr_bpm = np.nan
+
+            hr_times.append(ppg_time[start + window_len // 2])
+            hr_values.append(hr_bpm)
+
+        results['ppg']['hr_bpm_time'] = np.array(hr_times)
+        results['ppg']['hr_bpm'] = np.array(hr_values)
+
     fs = 256.0
     # Use this if you want to compute the sampling frequency from the time array
     # fs = int(round(1.0 / np.mean(np.diff(eeg_time))))
 
     # Step 0: collect raw data into array
     eeg_channels = ['TP9', 'TP10', 'AF7', 'AF8']
-    eeg_data = {ch: muse_data['eeg'][ch].to_numpy() for ch in eeg_channels}
+    eeg_data = {}
+    for ch in eeg_channels:
+        if ch in muse_data['eeg']:
+            channel_data = muse_data['eeg'][ch]
+            # Convert to numpy array if needed
+            if hasattr(channel_data, 'to_numpy'):
+                eeg_data[ch] = channel_data.to_numpy()
+            else:
+                # Already numpy array or list
+                eeg_data[ch] = np.array(channel_data)
 
     for ch in eeg_channels:
         results['eeg']['raw_data'][ch] = eeg_data[ch]
@@ -139,6 +190,26 @@ def processing_function(input_dict):
             band: np.trapezoid(psd[(f >= low) & (f <= high)], f[(f >= low) & (f <= high)])
             for band, (low, high) in bands.items()
         }
+
+    # Compute alpha coherence between AF7_RR and AF8_RR
+    valid_mask = ~np.isnan(reref_clean['AF7_RR']) & ~np.isnan(reref_clean['AF8_RR'])
+
+    if np.sum(valid_mask) >= fs * 2:
+        f_coh, coh = coherence(
+            reref_clean['AF7_RR'][valid_mask],
+            reref_clean['AF8_RR'][valid_mask],
+            fs=fs,
+            nperseg=2*int(fs),
+            noverlap=int(fs),
+            window='hann'
+        )
+
+        alpha_band = (f_coh >= 8) & (f_coh <= 12)
+        alpha_coherence = np.trapezoid(coh[alpha_band], f_coh[alpha_band]) / (f_coh[alpha_band][-1] - f_coh[alpha_band][0])
+    else:
+        alpha_coherence = np.nan
+
+    results['eeg']['alpha_coherence'] = alpha_coherence
 
     return results
 

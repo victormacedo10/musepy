@@ -299,6 +299,16 @@ class FastDataFrame:
         elif isinstance(key, list):
             # Multiple columns
             return FastDataFrame({col: self._data[col] for col in key})
+        elif isinstance(key, np.ndarray) and key.dtype == bool:
+            # Boolean indexing - return new FastDataFrame with selected rows
+            if len(key) != self.shape[0]:
+                raise ValueError(f"Boolean index length ({len(key)}) does not match DataFrame length ({self.shape[0]})")
+            
+            # Create new FastDataFrame with filtered data
+            filtered_data = {}
+            for col in self._columns:
+                filtered_data[col] = self._data[col][key]
+            return FastDataFrame(filtered_data)
         else:
             raise KeyError(f"Unsupported key type: {type(key)}")
     
@@ -493,34 +503,46 @@ class FastDataFrame:
                 new_columns.append(new_col)
             return FastDataFrame(new_data)
     
-    def reset_index(self, inplace=False):
-        """Reset index by moving index to a column"""
-        if inplace:
-            # Add index as first column
-            index_data = np.arange(len(self))
-            new_data = {'index': index_data}
-            new_columns = ['index']
-            
-            # Add existing columns
-            for col in self._columns:
-                new_data[col] = self._data[col]
-                new_columns.append(col)
-            
-            self._data = new_data
-            self._columns = new_columns
-            return self
+    def reset_index(self, inplace=False, drop=False):
+        """Reset index by moving index to a column or dropping it"""
+        if drop:
+            # If drop=True, just return a copy of the current DataFrame (no index column added)
+            if inplace:
+                return self
+            else:
+                # Return new DataFrame with same data but no index column
+                new_data = {}
+                for col in self._columns:
+                    new_data[col] = self._data[col].copy()
+                return FastDataFrame(new_data)
         else:
-            # Return new DataFrame with reset index
-            index_data = np.arange(len(self))
-            new_data = {'index': index_data}
-            new_columns = ['index']
-            
-            # Add existing columns
-            for col in self._columns:
-                new_data[col] = self._data[col].copy()
-                new_columns.append(col)
-            
-            return FastDataFrame(new_data)
+            # Original behavior - add index as first column
+            if inplace:
+                # Add index as first column
+                index_data = np.arange(len(self))
+                new_data = {'index': index_data}
+                new_columns = ['index']
+                
+                # Add existing columns
+                for col in self._columns:
+                    new_data[col] = self._data[col]
+                    new_columns.append(col)
+                
+                self._data = new_data
+                self._columns = new_columns
+                return self
+            else:
+                # Return new DataFrame with reset index
+                index_data = np.arange(len(self))
+                new_data = {'index': index_data}
+                new_columns = ['index']
+                
+                # Add existing columns
+                for col in self._columns:
+                    new_data[col] = self._data[col].copy()
+                    new_columns.append(col)
+                
+                return FastDataFrame(new_data)
     
     def round(self, decimals=0):
         """Round values to specified number of decimal places"""

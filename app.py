@@ -7,8 +7,9 @@ Main application entry point
 import sys
 from pathlib import Path
 from typing import Dict, Any
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel
-from PySide6.QtGui import QIcon, QPalette, QColor
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel, QSplashScreen
+from PySide6.QtGui import QIcon, QPalette, QColor, QPixmap
+from PySide6.QtCore import Qt, QTimer
 import matplotlib
 matplotlib.use("Qt5Agg")
 # Import our custom modules
@@ -438,7 +439,7 @@ class MusePyApp(QMainWindow):
     def setup_window(self):
         """Setup window properties"""
         # Set window icon if available
-        icon_path = Path(__file__).parent / "assets" / "icon.png"
+        icon_path = Path(__file__).parent / "assets" / "logo.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         
@@ -453,12 +454,33 @@ def main():
     """Main application entry point"""
     app = QApplication(sys.argv)
     
+    # Set application icon
+    icon_path = Path(__file__).parent / "assets" / "logo.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    
+    # Create and show splash screen
+    splash_path = Path(__file__).parent / "assets" / "splash_screen.png"
+    if splash_path.exists():
+        pixmap = QPixmap(str(splash_path))
+        splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
+        splash.setMask(pixmap.mask())
+        splash.show()
+        app.processEvents()
+        
+        # Show splash screen for 2 seconds
+        QTimer.singleShot(2000, splash.close)
+    
     # Get demo mode from command line flag
     demo_mode = "--demo" in sys.argv
     
     # Create and show main window
     window = MusePyApp(demo_mode=demo_mode)
     window.showMaximized()
+    
+    # Close splash screen when main window is ready
+    if splash_path.exists():
+        splash.finish(window)
     
     # Start application event loop
     sys.exit(app.exec())

@@ -94,6 +94,15 @@ def plot_spectrogram(data, fs, title):
 
 
 
+def plot_hr_bpm(hr_bpm, hr_bpm_time):
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
+    ax.plot(hr_bpm_time, hr_bpm)
+    ax.set_ylabel('Heart Rate (BPM)')
+    ax.set_xlabel('Time (s)')
+    plt.tight_layout()
+    return fig
+
+
 def visualization_function(inputs_dict, processing_dict):
     plt.close('all')
     output = {"plots": {}, "tables": {}}
@@ -134,11 +143,15 @@ def visualization_function(inputs_dict, processing_dict):
             fig = plot_spectrogram(ch_data, fs=256, title=f'Spectrogram (Raw) - {ch_name}')
             output['plots'][f'Spectrogram (Raw) - {ch_name}'] = fig
 
-
     if 'rereferenced' in processing_dict['eeg']:
         for ch_name, ch_data in processing_dict['eeg']['rereferenced'].items():
             fig = plot_spectrogram(ch_data, fs=256, title=f'Spectrogram (Filtered) - {ch_name}')
             output['plots'][f'Spectrogram (Filtered) - {ch_name}'] = fig
+
+    # Heart Rate
+    if 'hr_bpm' in processing_dict['ppg']:
+        fig = plot_hr_bpm(processing_dict['ppg']['hr_bpm'], processing_dict['ppg']['hr_bpm_time'])
+        output['plots']['Heart Rate'] = fig
 
     # create dataframe for EEG band power (absolute power from PSD)
     eeg_bp = processing_dict['eeg']['band_power']
@@ -180,5 +193,12 @@ def visualization_function(inputs_dict, processing_dict):
     
     # store table with units
     output["tables"]["EEG Bands Power (µV²)"] = df_bp.round(2)
+
+    # store table with alpha coherence
+    output["tables"]["EEG Alpha Coherence"] = pd.DataFrame({
+        'Alpha AF7_RR (8-12 Hz)': [round(processing_dict['eeg']['band_power']['AF7_RR']['alpha'], 2)],
+        'Alpha AF8_RR (8-12 Hz)': [round(processing_dict['eeg']['band_power']['AF8_RR']['alpha'], 2)],
+        'Alpha Coherence': [round(processing_dict['eeg']['alpha_coherence'], 2)]
+    })
 
     return output
