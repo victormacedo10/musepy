@@ -157,7 +157,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # Set to False for .app bundle
+    console=False,
     windowed=True,  # Enable windowed mode for .app bundle
     disable_windowed_traceback=False,
     target_arch=None,
@@ -166,14 +166,19 @@ exe = EXE(
     icon=str(current_dir / 'assets' / 'logo.png') if (current_dir / 'assets' / 'logo.png').exists() else None,
 )
 
-# Distribution
-coll = COLLECT(
+# Bundle for macOS .app
+app = BUNDLE(
     exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='MusePy_Mac'
+    name='MusePy.app',
+    bundle_identifier='com.musepy.app',
+    icon=str(current_dir / 'assets' / 'logo.png') if (current_dir / 'assets' / 'logo.png').exists() else None,
+    info_plist={
+        'CFBundleName': 'MusePy',
+        'CFBundleDisplayName': 'MusePy',
+        'CFBundleVersion': '1.0.0',
+        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleIdentifier': 'com.musepy.app',
+        'NSHighResolutionCapable': True,
+        'LSMinimumSystemVersion': '10.13',
+    },
 )
