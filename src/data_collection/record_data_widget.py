@@ -379,11 +379,17 @@ class RecordDataWidget(QGroupBox):
                     # Get IMU data
                     imu_data = self.parent.get_board_data(BrainFlowPresets.AUXILIARY_PRESET)
                     if not imu_data.empty:
+                        # Add time_rel column for metadata calculation
+                        if 'timestamp' in imu_data.columns and self.parent.timestamps_start:
+                            imu_data['time_rel'] = imu_data['timestamp'] - self.parent.timestamps_start
                         recorded_data['imu'] = imu_data
                         
                     # Get PPG data
                     ppg_data = self.parent.get_board_data(BrainFlowPresets.ANCILLARY_PRESET)
                     if not ppg_data.empty:
+                        # Add time_rel column for metadata calculation
+                        if 'timestamp' in ppg_data.columns and self.parent.timestamps_start:
+                            ppg_data['time_rel'] = ppg_data['timestamp'] - self.parent.timestamps_start
                         recorded_data['ppg'] = ppg_data
                 except Exception as e:
                     print(f"Error getting IMU/PPG data: {e}")

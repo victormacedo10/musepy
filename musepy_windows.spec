@@ -74,6 +74,7 @@ hidden_imports = [
     'itertools',
     'functools',
     'typing',
+    'unittest',
 ]
 
 # Data files to include
@@ -119,7 +120,6 @@ a = Analysis(
     excludes=[
         # Exclude unnecessary modules to reduce size
         'tkinter',
-        'unittest',
         'test',
         'tests',
         'pytest',
@@ -156,7 +156,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # Set to True for debugging
+    console=True,  # Set to True for debugging
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

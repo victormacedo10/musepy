@@ -1,3 +1,0 @@
-# Paste your Google Drive folder ID here
-# Get it from the URL when you open a folder in Google Drive
-# Example: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ123456789

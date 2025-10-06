@@ -5,11 +5,12 @@ Main application entry point
 """
 
 import sys
+import os
 from pathlib import Path
 from typing import Dict, Any
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel, QSplashScreen
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QFrame, QLabel, QSplashScreen, QMessageBox
 from PySide6.QtGui import QIcon, QPalette, QColor, QPixmap
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSharedMemory
 import matplotlib
 matplotlib.use("Qt5Agg")
 # Import our custom modules
@@ -55,6 +56,9 @@ class MusePyApp(QMainWindow):
         # Initialize feature widgets
         self.data_collection_widget = DataCollectionWidget(self.demo_mode, parent=self)
         self.data_analysis_widget = DataAnalysisWidget(parent=self)
+        
+        # Initialize data analysis control widgets early to avoid delay on first tab switch
+        self.initialize_data_analysis_widgets()
         
         # Add widgets to content area
         self.content_layout.addWidget(self.data_collection_widget)
@@ -131,6 +135,43 @@ class MusePyApp(QMainWindow):
         self.data_analysis_control_panel = None
         
         return left_frame
+    
+    def initialize_data_analysis_widgets(self):
+        """Initialize data analysis control widgets early to avoid delay on first tab switch"""
+        # Initialize result storage attributes
+        self.processing_results = {}
+        self.visualization_results = {}
+        
+        # Create data analysis control panel with all widgets
+        self.data_analysis_control_panel = QWidget()
+        analysis_layout = QVBoxLayout(self.data_analysis_control_panel)
+        analysis_layout.setContentsMargins(0, 0, 0, 0)
+        analysis_layout.setSpacing(0)
+        
+        # Create InputDataWidget
+        self.input_data_widget = InputDataWidget(parent=self)
+        analysis_layout.addWidget(self.input_data_widget)
+        
+        # Create ProcessingWidget
+        self.processing_widget = ProcessingWidget(parent=self)
+        analysis_layout.addWidget(self.processing_widget)
+        
+        # Create VisualizationWidget
+        self.visualization_widget = VisualizationWidget(parent=self)
+        analysis_layout.addWidget(self.visualization_widget)
+        
+        # Create Variable Inspector
+        self.variable_inspector = VariableInspectorWidget(parent=self)
+        analysis_layout.addWidget(self.variable_inspector)
+        
+        # Create Session Management (at the bottom)
+        self.session_management_widget = SessionManagementWidget(parent=self)
+        analysis_layout.addWidget(self.session_management_widget)
+        
+        # Connect signals
+        self.input_data_widget.file_loaded.connect(self.on_data_file_loaded)
+        self.input_data_widget.file_deleted.connect(self.on_data_file_deleted)
+        self.visualization_widget.view_output_executed.connect(self.on_visualization_executed)
     
     def create_nav_toggle_button(self, text, is_active=False):
         """Create a navigation toggle button"""
@@ -279,42 +320,7 @@ class MusePyApp(QMainWindow):
                 if item.widget():
                     item.widget().setParent(None)
             
-            # Create data analysis control panel with all widgets
-            if not self.data_analysis_control_panel:
-                self.data_analysis_control_panel = QWidget()
-                analysis_layout = QVBoxLayout(self.data_analysis_control_panel)
-                analysis_layout.setContentsMargins(0, 0, 0, 0)
-                analysis_layout.setSpacing(0)
-                
-                # Initialize result storage attributes
-                self.processing_results = {}
-                self.visualization_results = {}
-                
-                # Create InputDataWidget
-                self.input_data_widget = InputDataWidget(parent=self)
-                analysis_layout.addWidget(self.input_data_widget)
-                
-                # Create ProcessingWidget
-                self.processing_widget = ProcessingWidget(parent=self)
-                analysis_layout.addWidget(self.processing_widget)
-                
-                # Create VisualizationWidget
-                self.visualization_widget = VisualizationWidget(parent=self)
-                analysis_layout.addWidget(self.visualization_widget)
-                
-                # Create Variable Inspector
-                self.variable_inspector = VariableInspectorWidget(parent=self)
-                analysis_layout.addWidget(self.variable_inspector)
-                
-                # Create Session Management (at the bottom)
-                self.session_management_widget = SessionManagementWidget(parent=self)
-                analysis_layout.addWidget(self.session_management_widget)
-                
-                # Connect signals
-                self.input_data_widget.file_loaded.connect(self.on_data_file_loaded)
-                self.input_data_widget.file_deleted.connect(self.on_data_file_deleted)
-                self.visualization_widget.view_output_executed.connect(self.on_visualization_executed)
-            
+            # Add the pre-initialized data analysis control panel
             self.control_panel.layout().addWidget(self.data_analysis_control_panel)
     
     def on_data_file_loaded(self, file_id: str, file_path: str):
@@ -452,6 +458,21 @@ class MusePyApp(QMainWindow):
 
 def main():
     """Main application entry point"""
+    # Check for single instance using shared memory
+    app_id = "MusePy_SingleInstance"
+    shared_memory = QSharedMemory(app_id)
+    
+    if shared_memory.attach():
+        # Another instance is already running
+        QMessageBox.information(None, "MusePy", "MusePy is already running!")
+        sys.exit(1)
+    
+    if not shared_memory.create(1):
+        # Failed to create shared memory
+        QMessageBox.critical(None, "MusePy", "Failed to create single instance lock!")
+        sys.exit(1)
+    
+    # Create application
     app = QApplication(sys.argv)
     
     # Set application icon
@@ -461,15 +482,13 @@ def main():
     
     # Create and show splash screen
     splash_path = Path(__file__).parent / "assets" / "splash_screen.png"
+    splash = None
     if splash_path.exists():
         pixmap = QPixmap(str(splash_path))
         splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
         splash.setMask(pixmap.mask())
         splash.show()
         app.processEvents()
-        
-        # Show splash screen for 2 seconds
-        QTimer.singleShot(2000, splash.close)
     
     # Get demo mode from command line flag
     demo_mode = "--demo" in sys.argv
@@ -479,8 +498,8 @@ def main():
     window.showMaximized()
     
     # Close splash screen when main window is ready
-    if splash_path.exists():
-        splash.finish(window)
+    if splash:
+        QTimer.singleShot(1000, splash.close)  # Reduced time to 1 second
     
     # Start application event loop
     sys.exit(app.exec())
