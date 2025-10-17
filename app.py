@@ -458,6 +458,9 @@ class MusePyApp(QMainWindow):
 
 def main():
     """Main application entry point"""
+    # Create application first (required on macOS before any Qt objects)
+    app = QApplication(sys.argv)
+    
     # Check for single instance using shared memory
     app_id = "MusePy_SingleInstance"
     shared_memory = QSharedMemory(app_id)
@@ -471,9 +474,6 @@ def main():
         # Failed to create shared memory
         QMessageBox.critical(None, "MusePy", "Failed to create single instance lock!")
         sys.exit(1)
-    
-    # Create application
-    app = QApplication(sys.argv)
     
     # Set application icon
     icon_path = Path(__file__).parent / "assets" / "logo.png"
