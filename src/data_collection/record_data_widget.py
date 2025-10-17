@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, 
-    QLabel, QTextEdit, QFileDialog, QMessageBox
+    QLabel, QTextEdit, QFileDialog, QMessageBox, QScrollArea, QWidget
 )
 from PySide6.QtCore import Signal, QTimer, Qt
 from PySide6.QtGui import QPixmap, QIcon
@@ -62,6 +62,20 @@ class RecordDataWidget(QGroupBox):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         
+        # Create scroll area for form fields
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("QScrollArea { background-color: white; }")
+        
+        # Create widget to hold the scrollable content
+        scroll_widget = QWidget()
+        scroll_widget.setStyleSheet("QWidget { background-color: white; }")
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(10)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        
         # Data folder selection
         folder_layout = QHBoxLayout()
         folder_label = QLabel("Data Folder:")
@@ -89,7 +103,7 @@ class RecordDataWidget(QGroupBox):
         self.browse_btn.clicked.connect(self.browse_folder)
         folder_layout.addWidget(self.browse_btn)
         
-        layout.addLayout(folder_layout)
+        scroll_layout.addLayout(folder_layout)
         
         # Subject ID
         subject_layout = QHBoxLayout()
@@ -101,7 +115,7 @@ class RecordDataWidget(QGroupBox):
         self.subject_edit.setPlaceholderText("Enter subject ID (optional)")
         subject_layout.addWidget(self.subject_edit)
         
-        layout.addLayout(subject_layout)
+        scroll_layout.addLayout(subject_layout)
         
         # File name
         file_layout = QHBoxLayout()
@@ -113,18 +127,22 @@ class RecordDataWidget(QGroupBox):
         self.filename_edit.setText(datetime.now().strftime("%Y%m%d_%H%M%S"))
         file_layout.addWidget(self.filename_edit)
         
-        layout.addLayout(file_layout)
+        scroll_layout.addLayout(file_layout)
 
         # Description
         desc_label = QLabel("Description:")
         desc_label.setStyleSheet("background-color: white; color: #495057; border-right: none;")
-        layout.addWidget(desc_label)
+        scroll_layout.addWidget(desc_label)
         
         self.description_edit = QTextEdit()
         self.description_edit.setMaximumHeight(80)
         self.description_edit.setMinimumHeight(80)
         self.description_edit.setPlaceholderText("Enter recording description...")
-        layout.addWidget(self.description_edit)
+        scroll_layout.addWidget(self.description_edit)
+        
+        # Set the scroll widget
+        scroll_area.setWidget(scroll_widget)
+        layout.addWidget(scroll_area)
         
         # Record button, timer, and Google Drive button
         record_layout = QHBoxLayout()

@@ -15,7 +15,7 @@ import asyncio
 
 class MuseScanWorker(QThread):
     """Worker to scan BLE for Muse devices without blocking UI"""
-    success = Signal(list)   # list of device names like ["Muse-41D2", "Muse-7A3B"]
+    success = Signal(list, list)   # (muse_names, all_devices_info)
     failure = Signal(Exception)
     progress = Signal(str)
 
@@ -31,26 +31,49 @@ class MuseScanWorker(QThread):
                 "Bleak is required for BLE scanning. Install it with 'pip install bleak'."
             ) from e
 
+        from datetime import datetime
+        
+        print(f"\n{'='*60}")
+        print(f"🔍 Bluetooth BLE Scanner")
+        print(f"{'='*60}")
+        print(f"Scan timeout: {self.timeout_sec} seconds")
+        print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*60}\n")
+        
         self.progress.emit("Scanning for BLE devices...")
+        print("Scanning for BLE devices...\n")
+        
         devices = await BleakScanner.discover(timeout=self.timeout_sec)
-        # Filter by Muse advertising name
-        names = []
+        
+        # Collect all device info
+        all_devices_info = []
+        muse_names = []
+        
         for d in devices:
-            # Some platforms report None names until metadata resolves; keep it defensive
+            device_info = {
+                'name': d.name if d.name else "(No Name)",
+                'address': d.address,
+                'rssi': d.rssi if hasattr(d, 'rssi') and d.rssi else "N/A"
+            }
+            all_devices_info.append(device_info)
+            
+            # Track Muse devices
             if d.name and d.name.startswith("Muse-"):
-                names.append(d.name)
-        # De-duplicate while preserving order
+                muse_names.append(d.name)
+        
+        # De-duplicate Muse names while preserving order
         seen = set()
-        unique = [n for n in names if not (n in seen or seen.add(n))]
-        return unique
+        unique_muse = [n for n in muse_names if not (n in seen or seen.add(n))]
+        
+        return unique_muse, all_devices_info
 
     def run(self):
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            names = loop.run_until_complete(self._scan_async())
+            muse_names, all_devices = loop.run_until_complete(self._scan_async())
             loop.close()
-            self.success.emit(names)
+            self.success.emit(muse_names, all_devices)
         except Exception as e:
             self.failure.emit(e)
 
@@ -231,9 +254,42 @@ class ConnectDeviceWidget(QGroupBox):
     def on_scan_progress(self, msg: str):
         print(f"Scan: {msg}")
 
-    def on_scan_success(self, names: list[str]):
+    def on_scan_success(self, names: list[str], all_devices: list[dict]):
         self.scan_btn.setEnabled(True)
+        
+        # Print all discovered devices
+        if not all_devices:
+            print("❌ No BLE devices found.")
+            print("\nTroubleshooting tips:")
+            print("  • Make sure Bluetooth is enabled on your computer")
+            print("  • Ensure devices are in pairing/discoverable mode")
+            print("  • Try moving devices closer to your computer")
+            print("  • For Muse headbands: ensure LED is on and not connected to another device\n")
+        else:
+            print(f"✅ Found {len(all_devices)} device(s):\n")
+            print(f"{'No.':<4} {'Device Name':<30} {'MAC Address':<20} {'RSSI':<6}")
+            print(f"{'-'*4} {'-'*30} {'-'*20} {'-'*6}")
+            
+            for idx, device in enumerate(all_devices, 1):
+                name = device['name']
+                address = device['address']
+                rssi = device['rssi']
+                print(f"{idx:<4} {name:<30} {address:<20} {rssi:<6}")
+            
+            print(f"\n{'-'*60}")
+            
+            # Show Muse-specific devices
+            if names:
+                print(f"\n🧠 Muse devices found: {len(names)}")
+                for name in names:
+                    print(f"   • {name}")
+            else:
+                print("\n🧠 No Muse devices found")
+                print("   (Muse device names should start with 'Muse-')")
+            
+            print(f"\n{'='*60}\n")
 
+        # Show dialog if no Muse devices found
         if not names:
             QMessageBox.information(
                 self, "No Muse Found",
@@ -252,11 +308,18 @@ class ConnectDeviceWidget(QGroupBox):
         self.device_id_combo.setCurrentIndex(0)
 
         # Enable Connect now that we have at least one target
-        self.connect_btn.setEnabled(True)  # <-- if you truly wanted it disabled, flip to False
+        self.connect_btn.setEnabled(True)
 
     def on_scan_failure(self, e: Exception):
         self.scan_btn.setEnabled(True)
         self.connect_btn.setEnabled(False)
+        
+        print(f"\n❌ Scan failed: {e}")
+        print(f"Error type: {type(e).__name__}\n")
+        
+        import traceback
+        traceback.print_exc()
+        
         QMessageBox.critical(
             self, "Scan Failed",
             f"Failed to scan for Muse devices.\n\n{e}"
