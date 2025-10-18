@@ -2,15 +2,39 @@
 Record Data Widget - Handles data recording controls
 """
 
+import sys
 import pickle
+import io
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, 
-    QLabel, QTextEdit, QFileDialog, QMessageBox
+    QLabel, QTextEdit, QFileDialog, QMessageBox, QScrollArea, QWidget
 )
-import pandas as pd
-from PySide6.QtCore import Signal, QTimer
+from PySide6.QtCore import Signal, QTimer, Qt
+from PySide6.QtGui import QPixmap, QIcon
+from ..utils import pd
+
+# Google Drive imports
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import MediaIoBaseUpload
+    GOOGLE_DRIVE_AVAILABLE = True
+    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+except ImportError:
+    GOOGLE_DRIVE_AVAILABLE = False
+
+
+def get_base_path():
+    """Get the base path for resources, compatible with PyInstaller"""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        return Path(sys._MEIPASS)
+    else:
+        # Running as script
+        return Path(__file__).parent.parent.parent
 
 
 class RecordDataWidget(QGroupBox):
@@ -28,18 +52,38 @@ class RecordDataWidget(QGroupBox):
         self.recording_start_time = None
         
         # Setup default data folder
-        base_path = Path(__file__).parent.parent.parent
+        base_path = get_base_path()
         self.default_data_folder = base_path / "data"
         self.default_data_folder.mkdir(exist_ok=True)
         
+        # Google Drive settings
+        self.gdrive_enabled = True
+        self.gdrive_service = None
+        self.gdrive_folder_id = None
+        
         self.setup_ui()
         self.setup_connections()
+        self.load_gdrive_settings()
         self.set_enabled(False)  # Initially disabled until device is connected
         
     def setup_ui(self):
         """Setup the user interface"""
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+        
+        # Create scroll area for form fields
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("QScrollArea { background-color: white; }")
+        
+        # Create widget to hold the scrollable content
+        scroll_widget = QWidget()
+        scroll_widget.setStyleSheet("QWidget { background-color: white; }")
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(10)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
         
         # Data folder selection
         folder_layout = QHBoxLayout()
@@ -68,7 +112,7 @@ class RecordDataWidget(QGroupBox):
         self.browse_btn.clicked.connect(self.browse_folder)
         folder_layout.addWidget(self.browse_btn)
         
-        layout.addLayout(folder_layout)
+        scroll_layout.addLayout(folder_layout)
         
         # Subject ID
         subject_layout = QHBoxLayout()
@@ -80,7 +124,7 @@ class RecordDataWidget(QGroupBox):
         self.subject_edit.setPlaceholderText("Enter subject ID (optional)")
         subject_layout.addWidget(self.subject_edit)
         
-        layout.addLayout(subject_layout)
+        scroll_layout.addLayout(subject_layout)
         
         # File name
         file_layout = QHBoxLayout()
@@ -92,31 +136,30 @@ class RecordDataWidget(QGroupBox):
         self.filename_edit.setText(datetime.now().strftime("%Y%m%d_%H%M%S"))
         file_layout.addWidget(self.filename_edit)
         
-        layout.addLayout(file_layout)
+        scroll_layout.addLayout(file_layout)
 
         # Description
         desc_label = QLabel("Description:")
         desc_label.setStyleSheet("background-color: white; color: #495057; border-right: none;")
-        layout.addWidget(desc_label)
+        scroll_layout.addWidget(desc_label)
         
         self.description_edit = QTextEdit()
         self.description_edit.setMaximumHeight(80)
         self.description_edit.setMinimumHeight(80)
         self.description_edit.setPlaceholderText("Enter recording description...")
-        layout.addWidget(self.description_edit)
+        scroll_layout.addWidget(self.description_edit)
         
-        # Record button and timer
+        # Set the scroll widget
+        scroll_area.setWidget(scroll_widget)
+        layout.addWidget(scroll_area)
+        
+        # Record button, timer, and Google Drive button
         record_layout = QHBoxLayout()
         
-        self.record_btn = QPushButton("Start Recording")
-        self.record_btn.setFixedHeight(40)
-        self.record_btn.setCheckable(True)
-        self.record_btn.clicked.connect(self.toggle_recording)
-        record_layout.addWidget(self.record_btn)
-        
-        # Recording timer display
+        # Recording timer display (first)
         self.timer_label = QLabel("00:00:00s")
-        self.timer_label.setFixedWidth(100)
+        self.timer_label.setFixedWidth(90)
+        self.timer_label.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
         self.timer_label.setStyleSheet("""
             QLabel {
                 font-family: 'Courier New', monospace;
@@ -127,11 +170,64 @@ class RecordDataWidget(QGroupBox):
                 border: 1px solid #dee2e6;
                 border-radius: 4px;
                 padding: 4px 8px;
-                min-width: 80px;
+                min-width: 90px;
                 text-align: center;
             }
         """)
         record_layout.addWidget(self.timer_label)
+        
+        # Start Recording button (second)
+        self.record_btn = QPushButton("Start Recording")
+        self.record_btn.setFixedHeight(40)
+        self.record_btn.setCheckable(True)
+        self.record_btn.clicked.connect(self.toggle_recording)
+        record_layout.addWidget(self.record_btn)
+        
+        # Google Drive toggle button (third)
+        self.gdrive_btn = QPushButton()
+        self.gdrive_btn.setFixedSize(40, 40)
+        self.gdrive_btn.setCheckable(True)
+        self.gdrive_btn.setChecked(True)  # Selected by default
+        self.gdrive_btn.setToolTip("Upload to Google Drive")
+        self.gdrive_btn.clicked.connect(self.toggle_gdrive)
+        
+        # Load Google Drive logo
+        logo_path = get_base_path() / "assets" / "gd_logo.png"
+        if logo_path.exists():
+            pixmap = QPixmap(str(logo_path))
+            if not pixmap.isNull():
+                # Scale to fit button
+                scaled_pixmap = pixmap.scaled(30, 30, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.gdrive_btn.setIcon(QIcon(scaled_pixmap))
+        else:
+            self.gdrive_btn.setText("GD")
+            self.gdrive_btn.setToolTip("Upload to Google Drive (logo not found)")
+        
+        # Style the Google Drive button
+        self.gdrive_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 2px solid #6c757d;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #e9ecef;
+            }
+            QPushButton:checked {
+                background-color: #d4edda;
+                border: 2px solid #28a745;
+            }
+            QPushButton:checked:hover {
+                background-color: #c3e6cb;
+                border: 2px solid #218838;
+            }
+            QPushButton:disabled {
+                background-color: #e9ecef;
+                border-color: #ced4da;
+            }
+        """)
+        
+        record_layout.addWidget(self.gdrive_btn)
         
         layout.addLayout(record_layout)
         
@@ -311,11 +407,17 @@ class RecordDataWidget(QGroupBox):
                     # Get IMU data
                     imu_data = self.parent.get_board_data(BrainFlowPresets.AUXILIARY_PRESET)
                     if not imu_data.empty:
+                        # Add time_rel column for metadata calculation
+                        if 'timestamp' in imu_data.columns and self.parent.timestamps_start:
+                            imu_data['time_rel'] = imu_data['timestamp'] - self.parent.timestamps_start
                         recorded_data['imu'] = imu_data
                         
                     # Get PPG data
                     ppg_data = self.parent.get_board_data(BrainFlowPresets.ANCILLARY_PRESET)
                     if not ppg_data.empty:
+                        # Add time_rel column for metadata calculation
+                        if 'timestamp' in ppg_data.columns and self.parent.timestamps_start:
+                            ppg_data['time_rel'] = ppg_data['timestamp'] - self.parent.timestamps_start
                         recorded_data['ppg'] = ppg_data
                 except Exception as e:
                     print(f"Error getting IMU/PPG data: {e}")
@@ -380,6 +482,31 @@ class RecordDataWidget(QGroupBox):
                 print(f"Saved description: {desc_path}")
                     
             print(f"Recording saved: {filename}")
+            
+            # Upload to Google Drive if enabled
+            if self.gdrive_enabled:
+                try:
+                    # Determine what to upload
+                    subject_id = self.get_subject_id()
+                    if subject_id:
+                        # Upload the entire subject folder
+                        upload_path = save_folder
+                        upload_success = self.upload_to_gdrive(upload_path, subject_id)
+                    else:
+                        # Upload just the data file
+                        upload_path = data_path
+                        upload_success = self.upload_to_gdrive(upload_path)
+                    
+                    if upload_success:
+                        print("✅ Recording uploaded to Google Drive successfully")
+                    else:
+                        print("❌ Failed to upload recording to Google Drive")
+                        
+                except Exception as e:
+                    print(f"❌ Error during Google Drive upload: {e}")
+                    QMessageBox.warning(self, "Upload Warning", 
+                                      f"Recording saved locally but failed to upload to Google Drive: {str(e)}")
+            
             return str(data_path)
             
         except Exception as e:
@@ -414,6 +541,7 @@ class RecordDataWidget(QGroupBox):
         self.description_edit.setEnabled(enabled)
         self.filename_edit.setEnabled(enabled)
         self.browse_btn.setEnabled(enabled)
+        # Google Drive button is always enabled (can be toggled independently)
         
     def get_data_folder(self):
         """Get the current data folder path"""
@@ -426,3 +554,184 @@ class RecordDataWidget(QGroupBox):
     def get_description(self):
         """Get the current description"""
         return self.description_edit.toPlainText().strip()
+        
+    def toggle_gdrive(self):
+        """Toggle Google Drive upload"""
+        if not GOOGLE_DRIVE_AVAILABLE:
+            QMessageBox.warning(self, "Google Drive Not Available", 
+                              "Google Drive libraries are not installed. Please install them to enable upload functionality.\n\n"
+                              "Install with: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client")
+            self.gdrive_btn.setChecked(False)
+            self.gdrive_enabled = False
+            return
+            
+        self.gdrive_enabled = self.gdrive_btn.isChecked()
+            
+    def load_gdrive_settings(self):
+        """Load Google Drive settings from files"""
+        if not GOOGLE_DRIVE_AVAILABLE:
+            # Keep button enabled but show warning tooltip
+            self.gdrive_btn.setToolTip("Google Drive libraries not installed - install to enable upload")
+            return
+            
+        # Check for service_account.json file
+        base_path = get_base_path()
+        service_account_file = base_path / "google_drive" / "service_account.json"
+        
+        if not service_account_file.exists():
+            # Uncheck the Google Drive button and update tooltip
+            self.gdrive_btn.setChecked(False)
+            self.gdrive_btn.setToolTip("Service account key not found - add service_account.json to enable upload")
+            self.gdrive_enabled = False
+            return
+            
+        # Load folder ID
+        folder_id_file = base_path / "google_drive" / "folder_id.txt"
+        
+        if folder_id_file.exists():
+            try:
+                with open(folder_id_file, 'r') as f:
+                    self.gdrive_folder_id = f.read().strip()
+            except Exception as e:
+                print(f"Error loading folder ID: {e}")
+                self.gdrive_folder_id = None
+        else:
+            self.gdrive_folder_id = None
+            
+    def authenticate_gdrive(self):
+        """Authenticates with Google Drive API using service account."""
+        if not GOOGLE_DRIVE_AVAILABLE:
+            return None
+        
+        try:
+            base_path = get_base_path()
+            service_account_file = base_path / "google_drive" / "service_account.json"
+            
+            if not service_account_file.exists():
+                QMessageBox.critical(self, "Google Drive Error", 
+                                   f"Service account key not found at {service_account_file}")
+                return None
+            
+            # Authenticate using service account
+            creds = service_account.Credentials.from_service_account_file(
+                str(service_account_file), 
+                scopes=SCOPES
+            )
+            
+            service = build('drive', 'v3', credentials=creds)
+            return service
+            
+        except Exception as error:
+            QMessageBox.critical(self, "Google Drive Error", 
+                               f"Authentication error: {error}")
+            return None
+            
+    def upload_to_gdrive(self, file_path, subject_id=None):
+        """Upload file or folder to Google Drive"""
+        if not self.gdrive_enabled or not GOOGLE_DRIVE_AVAILABLE:
+            return False
+            
+        try:
+            # Authenticate if we haven't already
+            if not self.gdrive_service:
+                self.gdrive_service = self.authenticate_gdrive()
+                
+            if not self.gdrive_service:
+                return False
+                
+            file_path = Path(file_path)
+            
+            if file_path.is_file():
+                # Upload single file
+                return self._upload_file_to_gdrive(file_path)
+            elif file_path.is_dir():
+                # Upload entire folder (subject folder)
+                return self._upload_folder_to_gdrive(file_path, subject_id)
+            else:
+                print(f"Invalid path for upload: {file_path}")
+                return False
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Upload Error", f"An error occurred during upload: {str(e)}")
+            return False
+            
+    def _upload_file_to_gdrive(self, file_path):
+        """Upload a single file to Google Drive"""
+        try:
+            file_metadata = {
+                'name': file_path.name,
+                'mimeType': 'application/octet-stream'
+            }
+            
+            # Add the folder ID if specified
+            if self.gdrive_folder_id:
+                file_metadata['parents'] = [self.gdrive_folder_id]
+
+            # Create media object for file upload
+            media = MediaIoBaseUpload(io.FileIO(str(file_path), 'rb'),
+                                      mimetype='application/octet-stream',
+                                      resumable=True)
+            
+            # Call the Drive v3 API to create the file
+            file = self.gdrive_service.files().create(body=file_metadata,
+                                                      media_body=media,
+                                                      fields='id').execute()
+                                                      
+            print(f"✅ File uploaded successfully: {file_path.name} (ID: {file.get('id')})")
+            return True
+
+        except HttpError as error:
+            print(f"❌ Error during file upload: {error}")
+            return False
+        except Exception as e:
+            print(f"❌ An unexpected error occurred during file upload: {e}")
+            return False
+            
+    def _upload_folder_to_gdrive(self, folder_path, subject_id):
+        """Upload entire folder to Google Drive"""
+        try:
+            # Create folder in Google Drive first
+            folder_metadata = {
+                'name': folder_path.name if subject_id else 'MusePy_Recording',
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            
+            # Add the folder ID if specified
+            if self.gdrive_folder_id:
+                folder_metadata['parents'] = [self.gdrive_folder_id]
+
+            # Create the folder in Google Drive
+            folder = self.gdrive_service.files().create(body=folder_metadata,
+                                                       fields='id').execute()
+            
+            folder_id = folder.get('id')
+            print(f"✅ Created folder in Google Drive: {folder_path.name} (ID: {folder_id})")
+            
+            # Upload all files in the folder
+            uploaded_count = 0
+            for file_path in folder_path.iterdir():
+                if file_path.is_file():
+                    file_metadata = {
+                        'name': file_path.name,
+                        'parents': [folder_id]
+                    }
+                    
+                    media = MediaIoBaseUpload(io.FileIO(str(file_path), 'rb'),
+                                              mimetype='application/octet-stream',
+                                              resumable=True)
+                    
+                    file = self.gdrive_service.files().create(body=file_metadata,
+                                                              media_body=media,
+                                                              fields='id').execute()
+                    uploaded_count += 1
+                    print(f"✅ Uploaded: {file_path.name}")
+                    
+            print(f"✅ Folder upload completed: {uploaded_count} files uploaded")
+            return True
+
+        except HttpError as error:
+            print(f"❌ Error during folder upload: {error}")
+            return False
+        except Exception as e:
+            print(f"❌ An unexpected error occurred during folder upload: {e}")
+            return False

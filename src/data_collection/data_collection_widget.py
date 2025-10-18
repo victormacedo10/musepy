@@ -6,8 +6,8 @@ import pickle
 import time
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
+from ..utils import pd
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
 from PySide6.QtCore import QTimer
 
@@ -125,6 +125,15 @@ class DataCollectionWidget(QWidget):
         self.stream_data = pd.DataFrame()
         self.timestamps_start = None
         self.acquisition_plot.clear_curves()
+        
+        # Clear BrainFlow board buffer to prevent data from previous recordings
+        if self.board and not self.demo_mode:
+            try:
+                # Clear the board buffer by getting and discarding all current data
+                self.board.get_board_data()  # This clears the buffer
+                print("Cleared BrainFlow board buffer")
+            except Exception as e:
+                print(f"Error clearing board buffer: {e}")
         
         # Start streaming when recording starts
         self.start_streaming()
