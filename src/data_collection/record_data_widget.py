@@ -2,6 +2,7 @@
 Record Data Widget - Handles data recording controls
 """
 
+import sys
 import pickle
 import io
 from pathlib import Path
@@ -16,9 +17,7 @@ from ..utils import pd
 
 # Google Drive imports
 try:
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.oauth2 import service_account
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaIoBaseUpload
@@ -26,6 +25,16 @@ try:
     SCOPES = ['https://www.googleapis.com/auth/drive.file']
 except ImportError:
     GOOGLE_DRIVE_AVAILABLE = False
+
+
+def get_base_path():
+    """Get the base path for resources, compatible with PyInstaller"""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        return Path(sys._MEIPASS)
+    else:
+        # Running as script
+        return Path(__file__).parent.parent.parent
 
 
 class RecordDataWidget(QGroupBox):
@@ -43,7 +52,7 @@ class RecordDataWidget(QGroupBox):
         self.recording_start_time = None
         
         # Setup default data folder
-        base_path = Path(__file__).parent.parent.parent
+        base_path = get_base_path()
         self.default_data_folder = base_path / "data"
         self.default_data_folder.mkdir(exist_ok=True)
         
@@ -149,7 +158,8 @@ class RecordDataWidget(QGroupBox):
         
         # Recording timer display (first)
         self.timer_label = QLabel("00:00:00s")
-        self.timer_label.setFixedWidth(100)
+        self.timer_label.setFixedWidth(90)
+        self.timer_label.setAlignment(Qt.AlignVCenter | Qt.AlignHCenter)
         self.timer_label.setStyleSheet("""
             QLabel {
                 font-family: 'Courier New', monospace;
@@ -160,7 +170,7 @@ class RecordDataWidget(QGroupBox):
                 border: 1px solid #dee2e6;
                 border-radius: 4px;
                 padding: 4px 8px;
-                min-width: 80px;
+                min-width: 90px;
                 text-align: center;
             }
         """)
@@ -182,7 +192,7 @@ class RecordDataWidget(QGroupBox):
         self.gdrive_btn.clicked.connect(self.toggle_gdrive)
         
         # Load Google Drive logo
-        logo_path = Path(__file__).parent.parent.parent / "assets" / "gd_logo.png"
+        logo_path = get_base_path() / "assets" / "gd_logo.png"
         if logo_path.exists():
             pixmap = QPixmap(str(logo_path))
             if not pixmap.isNull():
@@ -564,14 +574,14 @@ class RecordDataWidget(QGroupBox):
             self.gdrive_btn.setToolTip("Google Drive libraries not installed - install to enable upload")
             return
             
-        # Check for credentials.json file
-        base_path = Path(__file__).parent.parent.parent
-        credentials_file = base_path / "google_drive" / "credentials.json"
+        # Check for service_account.json file
+        base_path = get_base_path()
+        service_account_file = base_path / "google_drive" / "service_account.json"
         
-        if not credentials_file.exists():
+        if not service_account_file.exists():
             # Uncheck the Google Drive button and update tooltip
             self.gdrive_btn.setChecked(False)
-            self.gdrive_btn.setToolTip("Google Drive credentials not found - add credentials.json to enable upload")
+            self.gdrive_btn.setToolTip("Service account key not found - add service_account.json to enable upload")
             self.gdrive_enabled = False
             return
             
@@ -589,41 +599,31 @@ class RecordDataWidget(QGroupBox):
             self.gdrive_folder_id = None
             
     def authenticate_gdrive(self):
-        """Authenticates with Google Drive API and returns a service object."""
+        """Authenticates with Google Drive API using service account."""
         if not GOOGLE_DRIVE_AVAILABLE:
             return None
-            
-        creds = None
-        base_path = Path(__file__).parent.parent.parent
-        token_file = base_path / "google_drive" / "token.json"
-        credentials_file = base_path / "google_drive" / "credentials.json"
-        
-        # The file token.json stores the user's access and refresh tokens.
-        if token_file.exists():
-            creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
-            
-        # If there are no (valid) credentials available, let the user log in.
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                # Make sure credentials.json is in the same folder
-                if not credentials_file.exists():
-                    QMessageBox.critical(self, "Google Drive Error", 
-                                       f"credentials.json not found at {credentials_file}. Please add your Google Drive credentials.")
-                    return None
-                flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
-                creds = flow.run_local_server(port=0)
-                
-            # Save the credentials for the next run
-            with open(token_file, 'w') as token:
-                token.write(creds.to_json())
         
         try:
+            base_path = get_base_path()
+            service_account_file = base_path / "google_drive" / "service_account.json"
+            
+            if not service_account_file.exists():
+                QMessageBox.critical(self, "Google Drive Error", 
+                                   f"Service account key not found at {service_account_file}")
+                return None
+            
+            # Authenticate using service account
+            creds = service_account.Credentials.from_service_account_file(
+                str(service_account_file), 
+                scopes=SCOPES
+            )
+            
             service = build('drive', 'v3', credentials=creds)
             return service
-        except HttpError as error:
-            QMessageBox.critical(self, "Google Drive Error", f"An error occurred during authentication: {error}")
+            
+        except Exception as error:
+            QMessageBox.critical(self, "Google Drive Error", 
+                               f"Authentication error: {error}")
             return None
             
     def upload_to_gdrive(self, file_path, subject_id=None):

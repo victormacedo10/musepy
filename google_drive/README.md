@@ -4,14 +4,32 @@ This folder contains the configuration files needed for Google Drive upload func
 
 ## Required Files
 
-### 1. credentials.json
-Download this file from the Google Cloud Console:
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select an existing one
-3. Enable the Google Drive API
-4. Go to "Credentials" and create "OAuth 2.0 Client IDs"
-5. Download the JSON file and rename it to `credentials.json`
-6. Place it in this folder
+### 1. service_account.json
+This is a service account key file from Google Cloud Console. Service accounts allow automatic, no-login-required uploads to a specific Google Drive folder.
+
+**Setup Instructions:**
+
+1. **Create a Service Account:**
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select an existing one
+   - Enable the Google Drive API
+   - Go to "IAM & Admin" → "Service Accounts"
+   - Click "Create Service Account"
+   - Give it a name (e.g., "MusePy Upload Service")
+   - Click "Create and Continue" → "Done"
+   - Click on the service account → "Keys" tab
+   - Click "Add Key" → "Create New Key" → "JSON"
+   - Download the JSON key file and rename it to `service_account.json`
+   - Place it in this folder
+
+2. **Share Your Drive Folder with the Service Account:**
+   - Open the downloaded JSON file and copy the `client_email` value (looks like: `your-service@project-id.iam.gserviceaccount.com`)
+   - Open Google Drive in your browser
+   - Navigate to the folder where you want recordings uploaded
+   - Right-click the folder → "Share"
+   - Paste the service account email
+   - Give it "Editor" permissions
+   - Click "Share"
 
 ### 2. folder_id.txt
 Create this file with the ID of your target Google Drive folder:
@@ -21,19 +39,31 @@ Create this file with the ID of your target Google Drive folder:
 4. Create a file named `folder_id.txt` in this folder
 5. Paste the folder ID into the file (no extra text, just the ID)
 
-## Optional Files
-
-### token.json
-This file is automatically created after the first successful authentication and contains your access tokens. Do not share this file as it contains sensitive authentication information.
-
 ## Example folder_id.txt content:
 ```
 1aBcDeFgHiJkLmNoPqRsTuVwXyZ123456789
 ```
 
+## Benefits of Service Account Approach
+
+- ✅ No user login required - uploads work automatically
+- ✅ No browser authentication prompts
+- ✅ Works on all platforms (Windows, macOS, Linux)
+- ✅ Works in headless/automated environments
+- ✅ All uploads go to your centralized folder
+- ✅ Users never see or access your Google account
+
+## Security Notes
+
+- The `service_account.json` file contains credentials that allow write access to the shared folder
+- Only share the specific folder with the service account, not your entire Drive
+- Keep the service account key secure but note it only has access to folders you explicitly share
+- If compromised, you can revoke it and create a new one in Google Cloud Console
+
 ## Troubleshooting
 
-- If you get authentication errors, delete `token.json` and try again
 - Make sure the Google Drive API is enabled in your Google Cloud project
-- Ensure the OAuth consent screen is properly configured
+- Verify the service account email has been granted Editor access to your Drive folder
+- Check that both `service_account.json` and `folder_id.txt` are in the correct location
 - The app requires the `https://www.googleapis.com/auth/drive.file` scope
+

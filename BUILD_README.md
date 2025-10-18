@@ -83,20 +83,18 @@ dist/
 
 ## Google Drive Setup for Distributions
 
-When distributing the built executable, users need to:
+When distributing the built executable:
 
-1. **Install Google Drive libraries** (if not included):
-   ```bash
-   pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
-   ```
+1. **Google Drive libraries are included** in the build (no separate installation needed)
 
-2. **Set up credentials**:
-   - Place `credentials.json` in the `google_drive/` folder
-   - Add folder ID to `google_drive/folder_id.txt`
+2. **Configuration files** (already in `google_drive/` folder):
+   - `service_account.json` - Service account key for authentication
+   - `folder_id.txt` - Target Google Drive folder ID
 
-3. **First-time authentication**:
-   - The app will open a browser for OAuth authentication
-   - Tokens will be saved in `google_drive/token.json`
+3. **No user authentication required**:
+   - Service account authentication is automatic
+   - No browser login needed
+   - All uploads go to the configured Drive folder
 
 ## Troubleshooting
 
@@ -108,8 +106,9 @@ When distributing the built executable, users need to:
 
 2. **Google Drive not working**:
    - Verify all Google Drive libraries are installed
-   - Check credentials.json is valid
+   - Check service_account.json is valid and in the correct location
    - Ensure folder_id.txt contains a valid Google Drive folder ID
+   - Verify the service account email has Editor access to the Drive folder
 
 3. **Large executable size**:
    - The spec files exclude unnecessary modules (tkinter, tests, etc.)
@@ -152,7 +151,7 @@ Add entries to the `datas` list:
 
 ## Security Considerations
 
-- Google Drive credentials should be kept secure
+- Service account key file should be kept secure
 - Built executables should be code-signed for distribution
-- Users should be educated about Google Drive permissions
-- Token files contain sensitive authentication data
+- Service account only has access to folders explicitly shared with it
+- Distribute executables through secure channels

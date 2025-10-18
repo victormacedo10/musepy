@@ -206,13 +206,14 @@ marimo/_lsp/
 __marimo__/
 
 # Data files
-data/
+data/*
 
 # Session files
-sessions/
+sessions/*
 
 # VSCode
 .vscode/
 
 # Google Drive
-google_drive/
+google_drive/folder_id.txt
+google_drive/service_account.json

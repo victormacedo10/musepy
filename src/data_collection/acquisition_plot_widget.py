@@ -128,29 +128,8 @@ class AcquisitionPlotWidget(QWidget):
                 background-color: white;
                 border: 1px solid #ced4da;
                 border-radius: 4px;
-                padding: 4px 8px;
+                padding: 2px 4px;
                 color: #495057;
-                min-width: 50px;
-                max-width: 50px;
-            }
-            QSpinBox::up-button {
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: 20px;
-                border-left: 1px solid #ced4da;
-                border-bottom: 1px solid #ced4da;
-            }
-            QSpinBox::down-button {
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                width: 20px;
-                border-left: 1px solid #ced4da;
-            }
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-                background-color: #f8f9fa;
-            }
-            QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {
-                background-color: #e9ecef;
             }
         """)
         controls_layout.addWidget(self.interval_spin)
