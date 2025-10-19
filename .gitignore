@@ -214,6 +214,9 @@ sessions/*
 # VSCode
 .vscode/
 
-# Google Drive
+# Google Drive - ignore sensitive files but keep templates and documentation
+google_drive/credentials.json
+google_drive/token.json
 google_drive/folder_id.txt
-google_drive/service_account.json
+# Keep these tracked:
+!google_drive/README.md

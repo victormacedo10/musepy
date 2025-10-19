@@ -6,8 +6,9 @@ import numpy as np
 from ..utils import pd
 import pyqtgraph as pg
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QSpinBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QLineEdit
 )
+from PySide6.QtGui import QIntValidator
 
 
 class AcquisitionPlotWidget(QWidget):
@@ -119,12 +120,17 @@ class AcquisitionPlotWidget(QWidget):
         # Plot interval control
         controls_layout.addWidget(QLabel("⏱️ Plot Interval (s):"))
         
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(1, 9999)
-        self.interval_spin.setValue(self.plot_interval)
-        self.interval_spin.valueChanged.connect(self.set_plot_interval)
-        self.interval_spin.setStyleSheet("""
-            QSpinBox {
+        self.interval_input = QLineEdit()
+        self.interval_input.setFixedWidth(60)
+        self.interval_input.setText(str(self.plot_interval))
+        
+        # Add integer validator
+        interval_validator = QIntValidator(1, 9999, self)
+        self.interval_input.setValidator(interval_validator)
+        
+        self.interval_input.editingFinished.connect(self.on_interval_changed)
+        self.interval_input.setStyleSheet("""
+            QLineEdit {
                 background-color: white;
                 border: 1px solid #ced4da;
                 border-radius: 4px;
@@ -132,7 +138,7 @@ class AcquisitionPlotWidget(QWidget):
                 color: #495057;
             }
         """)
-        controls_layout.addWidget(self.interval_spin)
+        controls_layout.addWidget(self.interval_input)
         
         layout.addLayout(controls_layout)
         
@@ -141,9 +147,17 @@ class AcquisitionPlotWidget(QWidget):
         if channel in self.curves:
             self.curves[channel].setVisible(visible)
             
-    def set_plot_interval(self, interval):
-        """Set the plot window interval"""
-        self.plot_interval = interval
+    def on_interval_changed(self):
+        """Handle plot interval change from line edit"""
+        text = self.interval_input.text()
+        if text:  # Only update if text is not empty
+            try:
+                interval = int(text)
+                if 1 <= interval <= 9999:
+                    self.plot_interval = interval
+            except ValueError:
+                # Reset to current value if invalid
+                self.interval_input.setText(str(self.plot_interval))
         
     def update_stream_data(self, data):
         """Update the plot with new streaming data"""
