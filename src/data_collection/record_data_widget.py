@@ -17,7 +17,9 @@ from ..utils import pd
 
 # Google Drive imports
 try:
-    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaIoBaseUpload
@@ -27,14 +29,31 @@ except ImportError:
     GOOGLE_DRIVE_AVAILABLE = False
 
 
-def get_base_path():
-    """Get the base path for resources, compatible with PyInstaller"""
+def get_resource_path():
+    """Get the base path for read-only resources (bundled with app), compatible with PyInstaller"""
     if getattr(sys, 'frozen', False):
-        # Running as compiled executable
+        # Running as compiled executable - resources are in the bundle
         return Path(sys._MEIPASS)
     else:
         # Running as script
         return Path(__file__).parent.parent.parent
+
+
+def get_config_path():
+    """Get the path for writable configuration files (user directory), compatible with PyInstaller"""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable - use user's config directory
+        if sys.platform == 'darwin':  # macOS
+            config_dir = Path.home() / 'Library' / 'Application Support' / 'MusePy'
+        elif sys.platform == 'win32':  # Windows
+            config_dir = Path.home() / 'AppData' / 'Local' / 'MusePy'
+        else:  # Linux
+            config_dir = Path.home() / '.config' / 'musepy'
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return config_dir
+    else:
+        # Running as script - use google_drive folder
+        return Path(__file__).parent.parent.parent / 'google_drive'
 
 
 class RecordDataWidget(QGroupBox):
@@ -52,8 +71,8 @@ class RecordDataWidget(QGroupBox):
         self.recording_start_time = None
         
         # Setup default data folder
-        base_path = get_base_path()
-        self.default_data_folder = base_path / "data"
+        resource_path = get_resource_path()
+        self.default_data_folder = resource_path / "data"
         self.default_data_folder.mkdir(exist_ok=True)
         
         # Google Drive settings
@@ -192,7 +211,7 @@ class RecordDataWidget(QGroupBox):
         self.gdrive_btn.clicked.connect(self.toggle_gdrive)
         
         # Load Google Drive logo
-        logo_path = get_base_path() / "assets" / "gd_logo.png"
+        logo_path = get_resource_path() / "assets" / "gd_logo.png"
         if logo_path.exists():
             pixmap = QPixmap(str(logo_path))
             if not pixmap.isNull():
@@ -574,19 +593,19 @@ class RecordDataWidget(QGroupBox):
             self.gdrive_btn.setToolTip("Google Drive libraries not installed - install to enable upload")
             return
             
-        # Check for service_account.json file
-        base_path = get_base_path()
-        service_account_file = base_path / "google_drive" / "service_account.json"
+        # Check for credentials.json file (read from bundled resources)
+        resource_path = get_resource_path()
+        credentials_file = resource_path / "google_drive" / "credentials.json"
         
-        if not service_account_file.exists():
+        if not credentials_file.exists():
             # Uncheck the Google Drive button and update tooltip
             self.gdrive_btn.setChecked(False)
-            self.gdrive_btn.setToolTip("Service account key not found - add service_account.json to enable upload")
+            self.gdrive_btn.setToolTip("Google Drive credentials not found - add credentials.json to enable upload")
             self.gdrive_enabled = False
             return
             
-        # Load folder ID
-        folder_id_file = base_path / "google_drive" / "folder_id.txt"
+        # Load folder ID (read from bundled resources)
+        folder_id_file = resource_path / "google_drive" / "folder_id.txt"
         
         if folder_id_file.exists():
             try:
@@ -599,24 +618,46 @@ class RecordDataWidget(QGroupBox):
             self.gdrive_folder_id = None
             
     def authenticate_gdrive(self):
-        """Authenticates with Google Drive API using service account."""
+        """Authenticates with Google Drive API using OAuth."""
         if not GOOGLE_DRIVE_AVAILABLE:
             return None
         
         try:
-            base_path = get_base_path()
-            service_account_file = base_path / "google_drive" / "service_account.json"
+            creds = None
             
-            if not service_account_file.exists():
-                QMessageBox.critical(self, "Google Drive Error", 
-                                   f"Service account key not found at {service_account_file}")
-                return None
+            # Paths for read-only resources (bundled with app)
+            resource_path = get_resource_path()
+            credentials_file = resource_path / "google_drive" / "credentials.json"
             
-            # Authenticate using service account
-            creds = service_account.Credentials.from_service_account_file(
-                str(service_account_file), 
-                scopes=SCOPES
-            )
+            # Path for writable token file (user config directory)
+            config_path = get_config_path()
+            token_file = config_path / "token.json"
+            
+            # The file token.json stores the user's access and refresh tokens
+            if token_file.exists():
+                creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+            
+            # If there are no (valid) credentials available, let the user log in
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    # Make sure credentials.json exists
+                    if not credentials_file.exists():
+                        QMessageBox.critical(self, "Google Drive Error", 
+                                           f"credentials.json not found at {credentials_file}.\n\n"
+                                           "Please add your Google Drive OAuth credentials.")
+                        return None
+                    
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        str(credentials_file), SCOPES)
+                    creds = flow.run_local_server(port=0)
+                
+                # Save the credentials for the next run
+                with open(token_file, 'w') as token:
+                    token.write(creds.to_json())
+                    
+                print(f"✅ Google Drive credentials saved to: {token_file}")
             
             service = build('drive', 'v3', credentials=creds)
             return service

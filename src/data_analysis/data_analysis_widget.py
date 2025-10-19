@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QTabWidget
 )
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QIntValidator
 import pyqtgraph as pg
 
 
@@ -2205,11 +2205,16 @@ class DataAnalysisWidget(QWidget):
         # Create DPI and save controls
         dpi_label = QLabel("DPI:")
         dpi_label.setStyleSheet("color: #495057; font-size: 11px; border: none;")
-        self.dpi_input = QSpinBox()
-        self.dpi_input.setRange(50, 600)
-        self.dpi_input.setValue(300)  # Default to 300 DPI for high quality
+        self.dpi_input = QLineEdit()
+        self.dpi_input.setFixedWidth(60)
+        self.dpi_input.setText("300")  # Default to 300 DPI for high quality
+        
+        # Add integer validator for DPI
+        dpi_validator = QIntValidator(50, 600, self)
+        self.dpi_input.setValidator(dpi_validator)
+        
         self.dpi_input.setStyleSheet("""
-            QSpinBox {
+            QLineEdit {
                 background-color: white;
                 border: 1px solid #ced4da;
                 border-radius: 4px;
@@ -2474,7 +2479,8 @@ class DataAnalysisWidget(QWidget):
                 "PNG Files (*.png);;PDF Files (*.pdf);;SVG Files (*.svg);;All Files (*.*)"
             )
             if file_path:
-                dpi = self.dpi_input.value()
+                dpi_text = self.dpi_input.text()
+                dpi = int(dpi_text) if dpi_text else 300  # Default to 300 if empty
                 self.current_figure.savefig(file_path, dpi=dpi, bbox_inches='tight')
                 QMessageBox.information(self, "Success", f"Figure saved successfully to {file_path}")
         except Exception as e:

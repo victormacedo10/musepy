@@ -87,14 +87,17 @@ When distributing the built executable:
 
 1. **Google Drive libraries are included** in the build (no separate installation needed)
 
-2. **Configuration files** (already in `google_drive/` folder):
-   - `service_account.json` - Service account key for authentication
+2. **Configuration files** (must be in `google_drive/` folder before building):
+   - `credentials.json` - OAuth 2.0 client credentials from Google Cloud Console
    - `folder_id.txt` - Target Google Drive folder ID
 
-3. **No user authentication required**:
-   - Service account authentication is automatic
-   - No browser login needed
-   - All uploads go to the configured Drive folder
+3. **First-time authentication** (on each computer):
+   - On first upload attempt, a browser window will open
+   - User authenticates with their Google account
+   - Token is saved automatically for future uploads
+   - Token storage location:
+     - Windows: `%LOCALAPPDATA%\MusePy\token.json`
+     - macOS: `~/Library/Application Support/MusePy/token.json`
 
 ## Troubleshooting
 
@@ -106,9 +109,10 @@ When distributing the built executable:
 
 2. **Google Drive not working**:
    - Verify all Google Drive libraries are installed
-   - Check service_account.json is valid and in the correct location
+   - Check credentials.json is valid and in the correct location
    - Ensure folder_id.txt contains a valid Google Drive folder ID
-   - Verify the service account email has Editor access to the Drive folder
+   - Make sure Google Drive API is enabled in Google Cloud Console
+   - Try deleting token.json from user config directory and re-authenticating
 
 3. **Large executable size**:
    - The spec files exclude unnecessary modules (tkinter, tests, etc.)
@@ -151,7 +155,8 @@ Add entries to the `datas` list:
 
 ## Security Considerations
 
-- Service account key file should be kept secure
+- OAuth credentials file (`credentials.json`) identifies your application (safe to bundle)
+- User tokens (`token.json`) are stored securely in user config directories
 - Built executables should be code-signed for distribution
-- Service account only has access to folders explicitly shared with it
+- Only the `drive.file` scope is requested (limited access)
 - Distribute executables through secure channels
