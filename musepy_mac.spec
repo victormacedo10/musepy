@@ -180,5 +180,8 @@ app = BUNDLE(
         'CFBundleIdentifier': 'com.musepy.app',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.13',
+        # Bluetooth permissions required for Muse EEG device connection
+        'NSBluetoothAlwaysUsageDescription': 'MusePy needs access to Bluetooth to connect to and acquire data from Muse EEG devices.',
+        'NSBluetoothPeripheralUsageDescription': 'MusePy needs access to Bluetooth to connect to and acquire data from Muse EEG devices.',
     },
 )
