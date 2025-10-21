@@ -59,14 +59,23 @@ hidden_imports = [
     'googleapiclient.errors',
     'googleapiclient.http',
     
-    # Essential runtime modules
+    # Standard library modules that might be missed
     'pickle',
     'pathlib',
     'datetime',
+    'io',
     'json',
     'csv',
     'threading',
     'queue',
+    'time',
+    'os',
+    'sys',
+    'collections',
+    'itertools',
+    'functools',
+    'typing',
+    'unittest',
 ]
 
 # Data files to include
@@ -116,9 +125,6 @@ a = Analysis(
         'IPython',
         'jupyter',
         'notebook',
-        'unittest',
-        'doctest',
-        'pydoc',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -145,7 +151,7 @@ exe = EXE(
     name='MusePy',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,  # Strip debug symbols to reduce size
+    strip=False,
     upx=False,  # Disable UPX - critical for Mac startup performance
     upx_exclude=[],
     runtime_tmpdir=None,
