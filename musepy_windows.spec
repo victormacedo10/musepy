@@ -118,7 +118,6 @@ a = Analysis(
         'unittest',
         'doctest',
         'pydoc',
-        'distutils',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
