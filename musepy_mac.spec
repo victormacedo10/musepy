@@ -59,23 +59,14 @@ hidden_imports = [
     'googleapiclient.errors',
     'googleapiclient.http',
     
-    # Standard library modules that might be missed
+    # Essential runtime modules
     'pickle',
     'pathlib',
     'datetime',
-    'io',
     'json',
     'csv',
     'threading',
     'queue',
-    'time',
-    'os',
-    'sys',
-    'collections',
-    'itertools',
-    'functools',
-    'typing',
-    'unittest',
 ]
 
 # Data files to include
@@ -86,10 +77,8 @@ datas = [
     (str(current_dir / 'assets'), 'assets'),
     # Include google_drive directory (for configuration)
     (str(current_dir / 'google_drive'), 'google_drive'),
-    # Include data directory (for default data folder)
-    (str(current_dir / 'data'), 'data'),
-    # Include sessions directory
-    (str(current_dir / 'sessions'), 'sessions'),
+    # NOTE: data and sessions directories are excluded from the bundle
+    # They will be created at runtime in the appropriate locations
 ]
 
 # Binaries to include (macOS-specific)
@@ -127,6 +116,10 @@ a = Analysis(
         'IPython',
         'jupyter',
         'notebook',
+        'unittest',
+        'doctest',
+        'pydoc',
+        'distutils',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -153,8 +146,8 @@ exe = EXE(
     name='MusePy',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    strip=True,  # Strip debug symbols to reduce size
+    upx=False,  # Disable UPX - critical for Mac startup performance
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

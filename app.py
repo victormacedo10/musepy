@@ -28,7 +28,7 @@ class MusePyApp(QMainWindow):
         self.setup_ui()
         self.setup_theme()
         self.setup_window()
-        
+
     def setup_ui(self):
         """Setup the main user interface"""
         self.setWindowTitle("MusePy - EEG Data Acquisition and Analysis by LabEsporte UnB")
