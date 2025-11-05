@@ -5,6 +5,7 @@ Record Data Widget - Handles data recording controls
 import sys
 import pickle
 import io
+import logging
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
@@ -70,6 +71,10 @@ class RecordDataWidget(QGroupBox):
         self.recording_timer = None
         self.recording_start_time = None
         
+        # Setup logger (use the same logger as parent if available)
+        self.logger = logging.getLogger('MusePy.RecordData')
+        self.logger.setLevel(logging.DEBUG)
+        
         # Setup default data folder
         resource_path = get_resource_path()
         self.default_data_folder = resource_path / "data"
@@ -84,6 +89,8 @@ class RecordDataWidget(QGroupBox):
         self.setup_connections()
         self.load_gdrive_settings()
         self.set_enabled(False)  # Initially disabled until device is connected
+        
+        self.logger.info("RecordDataWidget initialized")
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -372,12 +379,14 @@ class RecordDataWidget(QGroupBox):
     def start_recording(self):
         """Start recording"""
         if not self.parent or not hasattr(self.parent, 'is_connected') or not self.parent.is_connected:
+            self.logger.warning("Attempted to start recording without device connection")
             QMessageBox.warning(self, "Not Connected", "Please connect to a device first.")
             self.record_btn.setChecked(False)
             return
             
         self.is_recording = True
         self.recording_start_time = datetime.now()
+        self.logger.info(f"Recording started at {self.recording_start_time}")
         
         # Update UI
         self.record_btn.setText("Stop Recording")
@@ -387,19 +396,24 @@ class RecordDataWidget(QGroupBox):
         self.description_edit.setEnabled(False)
         self.filename_edit.setEnabled(False)
         self.browse_btn.setEnabled(False)
+        self.logger.debug("UI updated for recording state")
         
         # Start timer
         self.recording_timer.start(1000)  # Update every second
+        self.logger.debug("Recording timer started")
         
         # Emit signal
         self.recording_started.emit()
+        self.logger.debug("Recording started signal emitted")
         
     def stop_recording(self):
         """Stop recording"""
+        self.logger.info("Stopping recording...")
         self.is_recording = False
         
         # Stop timer
         self.recording_timer.stop()
+        self.logger.debug("Recording timer stopped")
         
         # Update UI
         self.record_btn.setText("Start Recording")
@@ -409,62 +423,78 @@ class RecordDataWidget(QGroupBox):
         self.description_edit.setEnabled(True)
         self.filename_edit.setEnabled(True)
         self.browse_btn.setEnabled(True)
+        self.logger.debug("UI updated for stopped state")
         
         # Reset timer display
         self.timer_label.setText("00:00:00s")
         
-        # Collect recorded data from parent
+        # Collect recorded data from CSV files
         recorded_data = {}
-        if self.parent and hasattr(self.parent, 'stream_data') and not self.parent.stream_data.empty:
-            # Get EEG data from streaming
-            recorded_data['eeg'] = self.parent.stream_data.copy()
+        
+        # Read CSV files that were written incrementally
+        try:
+            data_folder = self.get_data_folder()
+            subject_id = self.get_subject_id()
+            filename = self.filename_edit.text()
             
-            # Get IMU and PPG data if available
-            if hasattr(self.parent, 'board') and self.parent.board:
-                try:
-                    from brainflow.board_shim import BrainFlowPresets
-                    # Get IMU data
-                    imu_data = self.parent.get_board_data(BrainFlowPresets.AUXILIARY_PRESET)
-                    if not imu_data.empty:
-                        # Add time_rel column for metadata calculation
-                        if 'timestamp' in imu_data.columns and self.parent.timestamps_start:
-                            imu_data['time_rel'] = imu_data['timestamp'] - self.parent.timestamps_start
-                        recorded_data['imu'] = imu_data
-                        
-                    # Get PPG data
-                    ppg_data = self.parent.get_board_data(BrainFlowPresets.ANCILLARY_PRESET)
-                    if not ppg_data.empty:
-                        # Add time_rel column for metadata calculation
-                        if 'timestamp' in ppg_data.columns and self.parent.timestamps_start:
-                            ppg_data['time_rel'] = ppg_data['timestamp'] - self.parent.timestamps_start
-                        recorded_data['ppg'] = ppg_data
-                except Exception as e:
-                    print(f"Error getting IMU/PPG data: {e}")
+            # Determine recording folder
+            if subject_id:
+                recording_folder = Path(data_folder) / subject_id
+            else:
+                recording_folder = Path(data_folder)
+            
+            self.logger.info(f"Reading CSV files from: {recording_folder}")
+            
+            # Read each CSV file
+            for data_type in ['eeg', 'imu', 'ppg']:
+                csv_path = recording_folder / f"{filename}_{data_type}.csv"
+                if csv_path.exists():
+                    try:
+                        df = pd.read_csv(csv_path)
+                        if not df.empty:
+                            recorded_data[data_type] = df
+                            self.logger.info(f"Read {len(df)} rows from {data_type} CSV")
+                        else:
+                            self.logger.warning(f"{data_type} CSV is empty")
+                    except Exception as e:
+                        self.logger.error(f"Error reading {data_type} CSV: {e}", exc_info=True)
+                else:
+                    self.logger.warning(f"{data_type} CSV not found: {csv_path}")
             
             # Add metadata
             recorded_data['metadata'] = {
-                'filename': self.filename_edit.text(),
-                'subject_id': self.subject_edit.text(), 
+                'filename': filename,
+                'subject_id': subject_id, 
                 'description': self.description_edit.toPlainText(),
                 'recording_duration': self.get_recording_duration(),
                 'timestamp': datetime.now().strftime("%H:%M:%S - %d/%m/%Y")
             }
+            self.logger.debug(f"Metadata created: {recorded_data['metadata']}")
             
-            # Save recording with proper file structure
+            # Save recording with proper file structure (merge CSVs and create .data file)
             if recorded_data:
                 file_path = self.save_recording_with_files(recorded_data)
                 if file_path:
                     recorded_data['file_path'] = file_path
+                    self.logger.info(f"Recording saved to: {file_path}")
+                else:
+                    self.logger.error("Failed to save recording")
+        except Exception as e:
+            self.logger.error(f"Error processing recorded data: {e}", exc_info=True)
                     
         # Emit signal with recorded data
         self.recording_stopped.emit(recorded_data)
+        self.logger.debug("Recording stopped signal emitted")
         
         # Update filename for next recording
         self.filename_edit.setText(datetime.now().strftime("%Y%m%d_%H%M%S"))
+        self.logger.info(f"Recording stop complete. Duration: {self.get_recording_duration():.2f}s")
         
     def save_recording_with_files(self, recorded_data):
         """Save recording with proper file structure"""
         try:
+            self.logger.info("Saving recording with files...")
+            
             # Get data folder from record widget
             data_folder = self.get_data_folder()
             subject_id = self.get_subject_id()
@@ -478,33 +508,89 @@ class RecordDataWidget(QGroupBox):
                 save_folder = Path(data_folder)
                 
             save_folder.mkdir(parents=True, exist_ok=True)
+            self.logger.debug(f"Save folder: {save_folder}")
             
-            # Save CSV files (only if not in demo mode and we have real data)
-            if not (self.parent and hasattr(self.parent, 'demo_mode') and self.parent.demo_mode):
-                for key, df in recorded_data.items():
-                    if isinstance(df, pd.DataFrame) and not df.empty and key in ['eeg', 'ppg', 'imu']:
-                        csv_path = save_folder / f"{filename}_{key}.csv"
-                        df.to_csv(csv_path, index=False)
-                        print(f"Saved {key} CSV: {csv_path}")
+            # Merge EEG, IMU, and PPG into a single combined CSV
+            try:
+                self.logger.info("Merging EEG, IMU, and PPG data into combined CSV...")
+                combined_df = None
+                
+                # Start with EEG data as the base
+                if 'eeg' in recorded_data and isinstance(recorded_data['eeg'], pd.DataFrame):
+                    combined_df = recorded_data['eeg'].copy()
+                    self.logger.debug(f"Base EEG data: {len(combined_df)} rows")
+                
+                # Merge IMU data if available (based on timestamp or time_rel)
+                if 'imu' in recorded_data and isinstance(recorded_data['imu'], pd.DataFrame):
+                    imu_df = recorded_data['imu']
+                    if combined_df is not None and not imu_df.empty:
+                        # Merge on timestamp or time_rel if available
+                        if 'timestamp' in combined_df.columns and 'timestamp' in imu_df.columns:
+                            combined_df = pd.merge_asof(
+                                combined_df.sort_values('timestamp'),
+                                imu_df.sort_values('timestamp'),
+                                on='timestamp',
+                                direction='nearest',
+                                suffixes=('', '_imu')
+                            )
+                            self.logger.debug(f"Merged IMU data: {len(imu_df)} rows")
+                        else:
+                            self.logger.warning("Cannot merge IMU data: missing timestamp column")
+                
+                # Merge PPG data if available
+                if 'ppg' in recorded_data and isinstance(recorded_data['ppg'], pd.DataFrame):
+                    ppg_df = recorded_data['ppg']
+                    if combined_df is not None and not ppg_df.empty:
+                        # Merge on timestamp or time_rel if available
+                        if 'timestamp' in combined_df.columns and 'timestamp' in ppg_df.columns:
+                            combined_df = pd.merge_asof(
+                                combined_df.sort_values('timestamp'),
+                                ppg_df.sort_values('timestamp'),
+                                on='timestamp',
+                                direction='nearest',
+                                suffixes=('', '_ppg')
+                            )
+                            self.logger.debug(f"Merged PPG data: {len(ppg_df)} rows")
+                        else:
+                            self.logger.warning("Cannot merge PPG data: missing timestamp column")
+                
+                # Save the combined CSV
+                if combined_df is not None and not combined_df.empty:
+                    combined_csv_path = save_folder / f"{filename}_combined.csv"
+                    combined_df.to_csv(combined_csv_path, index=False)
+                    self.logger.info(f"Saved combined CSV: {combined_csv_path} ({len(combined_df)} rows)")
+                else:
+                    self.logger.warning("No data to save in combined CSV")
+                    
+            except Exception as e:
+                self.logger.error(f"Error creating combined CSV: {e}", exc_info=True)
+            
+            # Save individual CSV files are already saved incrementally by data_collection_widget
+            # Just log that they exist
+            for key in ['eeg', 'imu', 'ppg']:
+                csv_path = save_folder / f"{filename}_{key}.csv"
+                if csv_path.exists():
+                    self.logger.info(f"Individual CSV exists: {csv_path}")
                         
-            # Save combined data file (always)
+            # Save combined .data file (always)
             data_path = save_folder / f"{filename}.data"
             with open(data_path, 'wb') as f:
                 pickle.dump(recorded_data, f)
-            print(f"Saved data file: {data_path}")
+            self.logger.info(f"Saved .data file: {data_path}")
                 
             # Save description if provided (always)
             if description:
                 desc_path = save_folder / f"{filename}_description.txt"
                 with open(desc_path, 'w') as f:
                     f.write(description)
-                print(f"Saved description: {desc_path}")
+                self.logger.info(f"Saved description: {desc_path}")
                     
-            print(f"Recording saved: {filename}")
+            self.logger.info(f"Recording saved successfully: {filename}")
             
             # Upload to Google Drive if enabled
             if self.gdrive_enabled:
                 try:
+                    self.logger.info("Uploading to Google Drive...")
                     # Determine what to upload
                     subject_id = self.get_subject_id()
                     if subject_id:
@@ -517,19 +603,19 @@ class RecordDataWidget(QGroupBox):
                         upload_success = self.upload_to_gdrive(upload_path)
                     
                     if upload_success:
-                        print("✅ Recording uploaded to Google Drive successfully")
+                        self.logger.info("✅ Recording uploaded to Google Drive successfully")
                     else:
-                        print("❌ Failed to upload recording to Google Drive")
+                        self.logger.warning("❌ Failed to upload recording to Google Drive")
                         
                 except Exception as e:
-                    print(f"❌ Error during Google Drive upload: {e}")
+                    self.logger.error(f"❌ Error during Google Drive upload: {e}", exc_info=True)
                     QMessageBox.warning(self, "Upload Warning", 
                                       f"Recording saved locally but failed to upload to Google Drive: {str(e)}")
             
             return str(data_path)
             
         except Exception as e:
-            print(f"Error saving recording: {str(e)}")
+            self.logger.error(f"Error saving recording: {str(e)}", exc_info=True)
             return False
             
     def update_timer(self):

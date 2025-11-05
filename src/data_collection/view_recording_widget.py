@@ -2,12 +2,16 @@
 View Recording Widget - Handles viewing recorded data and metadata
 """
 
+import pickle
+import logging
 from pathlib import Path
+from datetime import datetime
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, 
     QLabel, QScrollArea, QWidget, QFileDialog, QMessageBox
 )
 from PySide6.QtCore import Signal
+from ..utils import pd
 
 
 class MetadataWidget(QWidget):
@@ -125,9 +129,15 @@ class ViewRecordingWidget(QGroupBox):
         self.parent = parent
         self.current_file_path = ""
         
+        # Setup logger
+        self.logger = logging.getLogger('MusePy.ViewRecording')
+        self.logger.setLevel(logging.DEBUG)
+        
         self.setup_ui()
         self.setup_connections()
         self.set_enabled(True)
+        
+        self.logger.info("ViewRecordingWidget initialized")
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -141,7 +151,7 @@ class ViewRecordingWidget(QGroupBox):
         file_layout.addWidget(file_label)
         
         self.file_edit = QLineEdit()
-        self.file_edit.setPlaceholderText("Select a .data file to view...")
+        self.file_edit.setPlaceholderText("Select a .data or .csv file to view...")
         file_layout.addWidget(self.file_edit)
         
         self.browse_btn = QPushButton("📁")
@@ -246,10 +256,11 @@ class ViewRecordingWidget(QGroupBox):
             self,
             "Select Recording File",
             "",
-            "Data Files (*.data);;All Files (*.*)"
+            "Data Files (*.data);;CSV Files (*.csv);;All Files (*.*)"
         )
         if file_path:
             self.set_data_file(file_path)
+            self.logger.info(f"File selected: {file_path}")
             
     def set_data_file(self, file_path):
         """Set the data file path"""
@@ -265,13 +276,236 @@ class ViewRecordingWidget(QGroupBox):
             QMessageBox.warning(self, "No File", "Please select a data file first.")
             return
             
-        if not Path(self.current_file_path).exists():
+        file_path = Path(self.current_file_path)
+        if not file_path.exists():
             QMessageBox.warning(self, "File Not Found", "The selected file does not exist.")
             return
+        
+        self.logger.info(f"Viewing recording: {file_path}")
+        
+        # Check if the selected file is a CSV file
+        if file_path.suffix.lower() == '.csv':
+            self.logger.info("CSV file detected, checking for reconstruction...")
+            data_file_path = self.handle_csv_file(file_path)
+            if data_file_path is None:
+                return  # Error was already shown to user
+            file_path = data_file_path
             
         # Emit signal to load the recording
-        self.view_recording_requested.emit(self.current_file_path)
+        self.view_recording_requested.emit(str(file_path))
+        self.logger.info(f"Recording view requested: {file_path}")
         
+    def handle_csv_file(self, csv_file_path):
+        """
+        Handle CSV file selection. Check for .data file existence,
+        and if not found, reconstruct it from the three base CSV files.
+        
+        Returns:
+            Path to the .data file, or None if reconstruction failed
+        """
+        csv_file_path = Path(csv_file_path)
+        folder = csv_file_path.parent
+        
+        # Extract base filename (remove _eeg, _imu, _ppg, or _combined suffix)
+        filename = csv_file_path.stem
+        for suffix in ['_eeg', '_imu', '_ppg', '_combined']:
+            if filename.endswith(suffix):
+                filename = filename[:-len(suffix)]
+                break
+        
+        self.logger.info(f"Base filename extracted: {filename}")
+        
+        # Check if .data file exists
+        data_file_path = folder / f"{filename}.data"
+        if data_file_path.exists():
+            self.logger.info(f".data file already exists: {data_file_path}")
+            return data_file_path
+        
+        # Check if combined CSV exists - if yes, just need to create .data from it
+        combined_csv_path = folder / f"{filename}_combined.csv"
+        if combined_csv_path.exists():
+            self.logger.info(f"Combined CSV exists, creating .data from it: {combined_csv_path}")
+            return self.create_data_from_combined_csv(folder, filename, combined_csv_path)
+        
+        # Check if all three base CSV files exist
+        eeg_path = folder / f"{filename}_eeg.csv"
+        imu_path = folder / f"{filename}_imu.csv"
+        ppg_path = folder / f"{filename}_ppg.csv"
+        
+        existing_files = []
+        missing_files = []
+        
+        for file_path, name in [(eeg_path, 'EEG'), (imu_path, 'IMU'), (ppg_path, 'PPG')]:
+            if file_path.exists():
+                existing_files.append((file_path, name))
+                self.logger.info(f"{name} CSV found: {file_path}")
+            else:
+                missing_files.append(name)
+                self.logger.warning(f"{name} CSV not found: {file_path}")
+        
+        # If not all three exist, show error
+        if len(existing_files) < 3:
+            error_msg = (
+                f"Cannot reconstruct .data file for '{filename}'.\n\n"
+                f"Found: {', '.join([name for _, name in existing_files])}\n"
+                f"Missing: {', '.join(missing_files)}\n\n"
+                f"All three CSV files (EEG, IMU, PPG) are required to reconstruct the recording."
+            )
+            self.logger.error(error_msg)
+            QMessageBox.warning(self, "Missing Files", error_msg)
+            return None
+        
+        # All three files exist - reconstruct the .data file
+        self.logger.info("All three base CSV files found. Reconstructing .data file...")
+        return self.reconstruct_data_file(folder, filename, eeg_path, imu_path, ppg_path)
+    
+    def create_data_from_combined_csv(self, folder, filename, combined_csv_path):
+        """Create .data file from existing combined CSV"""
+        try:
+            self.logger.info(f"Reading combined CSV: {combined_csv_path}")
+            combined_df = pd.read_csv(combined_csv_path)
+            
+            # For now, treat the combined data as EEG data
+            # In the future, could split it back into EEG, IMU, PPG
+            recorded_data = {
+                'eeg': combined_df,
+                'metadata': {
+                    'filename': filename,
+                    'subject_id': '',
+                    'description': 'Reconstructed from combined CSV',
+                    'recording_duration': 0,
+                    'timestamp': datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
+                    'reconstructed': True
+                }
+            }
+            
+            # Save .data file
+            data_path = folder / f"{filename}.data"
+            with open(data_path, 'wb') as f:
+                pickle.dump(recorded_data, f)
+            
+            self.logger.info(f"Created .data file from combined CSV: {data_path}")
+            QMessageBox.information(
+                self, 
+                "File Reconstructed", 
+                f"Successfully created .data file from combined CSV:\n{data_path}"
+            )
+            
+            return data_path
+            
+        except Exception as e:
+            error_msg = f"Failed to create .data file from combined CSV: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            QMessageBox.critical(self, "Error", error_msg)
+            return None
+    
+    def reconstruct_data_file(self, folder, filename, eeg_path, imu_path, ppg_path):
+        """
+        Reconstruct .data file and combined CSV from the three base CSV files.
+        This is the recovery feature for when the app froze during recording.
+        """
+        try:
+            self.logger.info("Starting .data file reconstruction...")
+            
+            # Read all three CSV files
+            self.logger.info(f"Reading EEG CSV: {eeg_path}")
+            eeg_df = pd.read_csv(eeg_path)
+            
+            self.logger.info(f"Reading IMU CSV: {imu_path}")
+            imu_df = pd.read_csv(imu_path)
+            
+            self.logger.info(f"Reading PPG CSV: {ppg_path}")
+            ppg_df = pd.read_csv(ppg_path)
+            
+            self.logger.info(f"Loaded: EEG={len(eeg_df)} rows, IMU={len(imu_df)} rows, PPG={len(ppg_df)} rows")
+            
+            # Create combined CSV
+            combined_df = None
+            
+            # Start with EEG as base
+            if not eeg_df.empty:
+                combined_df = eeg_df.copy()
+                self.logger.debug(f"Base EEG data: {len(combined_df)} rows")
+            
+            # Merge IMU data
+            if not imu_df.empty and combined_df is not None:
+                if 'timestamp' in combined_df.columns and 'timestamp' in imu_df.columns:
+                    combined_df = pd.merge_asof(
+                        combined_df.sort_values('timestamp'),
+                        imu_df.sort_values('timestamp'),
+                        on='timestamp',
+                        direction='nearest',
+                        suffixes=('', '_imu')
+                    )
+                    self.logger.debug(f"Merged IMU data: {len(imu_df)} rows")
+            
+            # Merge PPG data
+            if not ppg_df.empty and combined_df is not None:
+                if 'timestamp' in combined_df.columns and 'timestamp' in ppg_df.columns:
+                    combined_df = pd.merge_asof(
+                        combined_df.sort_values('timestamp'),
+                        ppg_df.sort_values('timestamp'),
+                        on='timestamp',
+                        direction='nearest',
+                        suffixes=('', '_ppg')
+                    )
+                    self.logger.debug(f"Merged PPG data: {len(ppg_df)} rows")
+            
+            # Save combined CSV
+            if combined_df is not None and not combined_df.empty:
+                combined_csv_path = folder / f"{filename}_combined.csv"
+                combined_df.to_csv(combined_csv_path, index=False)
+                self.logger.info(f"Created combined CSV: {combined_csv_path} ({len(combined_df)} rows)")
+            
+            # Calculate recording duration
+            recording_duration = 0
+            if not eeg_df.empty and 'time_rel' in eeg_df.columns:
+                recording_duration = eeg_df['time_rel'].max() - eeg_df['time_rel'].min()
+            
+            # Create metadata
+            metadata = {
+                'filename': filename,
+                'subject_id': '',
+                'description': 'Reconstructed from CSV files (recovery mode)',
+                'recording_duration': recording_duration,
+                'timestamp': datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
+                'reconstructed': True
+            }
+            
+            # Create recorded_data dictionary
+            recorded_data = {
+                'eeg': eeg_df,
+                'imu': imu_df,
+                'ppg': ppg_df,
+                'metadata': metadata
+            }
+            
+            # Save .data file
+            data_path = folder / f"{filename}.data"
+            with open(data_path, 'wb') as f:
+                pickle.dump(recorded_data, f)
+            
+            self.logger.info(f"Successfully created .data file: {data_path}")
+            
+            # Show success message
+            QMessageBox.information(
+                self, 
+                "File Reconstructed", 
+                f"Successfully reconstructed .data file and combined CSV from base CSV files:\n\n"
+                f"Created:\n"
+                f"  • {filename}.data\n"
+                f"  • {filename}_combined.csv\n\n"
+                f"This recording can now be viewed normally."
+            )
+            
+            return data_path
+            
+        except Exception as e:
+            error_msg = f"Failed to reconstruct .data file: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            QMessageBox.critical(self, "Reconstruction Error", error_msg)
+            return None
+    
     def update_metadata(self, data_dict):
         """Update metadata display"""
         self.metadata_widget.update_metadata(data_dict)
