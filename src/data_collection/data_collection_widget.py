@@ -41,6 +41,9 @@ class DataCollectionWidget(QWidget):
         self.recorded_data = {}
         self.stream_data = pd.DataFrame()
         self.timestamps_start = None
+        self.timestamps_start_eeg = None
+        self.timestamps_start_imu = None
+        self.timestamps_start_ppg = None
         self.stream_timer = None
         
         # CSV file handles for incremental writing
@@ -234,6 +237,9 @@ class DataCollectionWidget(QWidget):
         self.recorded_data = {}
         self.stream_data = pd.DataFrame()
         self.timestamps_start = None
+        self.timestamps_start_eeg = None
+        self.timestamps_start_imu = None
+        self.timestamps_start_ppg = None
         self.acquisition_plot.clear_curves()
         self.logger.debug("Previous data cleared")
         
@@ -241,8 +247,11 @@ class DataCollectionWidget(QWidget):
         if self.board and not self.demo_mode:
             try:
                 # Clear the board buffer by getting and discarding all current data
-                self.board.get_board_data()  # This clears the buffer
-                self.logger.info("Cleared BrainFlow board buffer")
+                # Clear all presets
+                self.board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
+                self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
+                self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
+                self.logger.info("Cleared BrainFlow board buffer for all presets")
             except Exception as e:
                 self.logger.error(f"Error clearing board buffer: {e}", exc_info=True)
         
@@ -381,8 +390,9 @@ class DataCollectionWidget(QWidget):
         if self.stream_timer is None:
             self.stream_timer = QTimer()
             self.stream_timer.timeout.connect(self.update_stream)
-            self.stream_timer.start(100)  # 10 Hz update rate
-            self.logger.debug("Stream timer started (100ms interval)")
+            # Use 50ms interval (20 Hz) for more stable sampling rate and to catch all data
+            self.stream_timer.start(50)
+            self.logger.debug("Stream timer started (50ms interval)")
             
     def stop_streaming(self):
         """Stop real-time data streaming"""
@@ -432,11 +442,25 @@ class DataCollectionWidget(QWidget):
                 if df_eeg.empty:
                     return
                     
-                if self.timestamps_start is None:
-                    self.timestamps_start = df_eeg['timestamp'].iloc[0]
-                    self.logger.info(f"First EEG data received at timestamp: {self.timestamps_start}")
+                # Set timestamp reference for EEG
+                if self.timestamps_start_eeg is None and not df_eeg.empty and 'timestamp' in df_eeg.columns:
+                    # FastDataFrame: access first timestamp value
+                    timestamp_data = df_eeg._data['timestamp']
+                    self.timestamps_start_eeg = float(timestamp_data[0]) if len(timestamp_data) > 0 else None
+                    if self.timestamps_start_eeg is not None:
+                        self.logger.info(f"First EEG data received at timestamp: {self.timestamps_start_eeg}")
+                        # Update global reference to earliest timestamp
+                        if self.timestamps_start is None or self.timestamps_start_eeg < self.timestamps_start:
+                            self.timestamps_start = self.timestamps_start_eeg
+                            self.logger.info(f"Updated global timestamp reference to: {self.timestamps_start}")
                 
-                df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamps_start
+                # Calculate time_rel using the global reference (earliest timestamp across all types)
+                if self.timestamps_start is not None:
+                    df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamps_start
+                    # Log warning if we get negative values
+                    time_rel_data = df_eeg._data['time_rel']
+                    if len(time_rel_data) > 0 and float(np.min(time_rel_data)) < 0:
+                        self.logger.warning(f"EEG time_rel has negative values! Min: {np.min(time_rel_data):.6f}s. Global ref: {self.timestamps_start}, EEG start: {self.timestamps_start_eeg}")
                 
                 # Get IMU data
                 try:
@@ -444,7 +468,24 @@ class DataCollectionWidget(QWidget):
                     if imu_data.size > 0:
                         df_imu = self.make_dataframe(imu_data, BrainFlowPresets.AUXILIARY_PRESET)
                         if not df_imu.empty and 'timestamp' in df_imu.columns:
-                            df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
+                            # Set timestamp reference for IMU
+                            if self.timestamps_start_imu is None:
+                                timestamp_data = df_imu._data['timestamp']
+                                self.timestamps_start_imu = float(timestamp_data[0]) if len(timestamp_data) > 0 else None
+                                # Update global reference to earliest timestamp
+                                if self.timestamps_start_imu is not None:
+                                    if self.timestamps_start is None or self.timestamps_start_imu < self.timestamps_start:
+                                        old_ref = self.timestamps_start
+                                        self.timestamps_start = self.timestamps_start_imu
+                                        self.logger.info(f"Updated global timestamp reference from {old_ref} to {self.timestamps_start} (IMU earlier)")
+                            
+                            # Calculate time_rel using the global reference
+                            if self.timestamps_start is not None:
+                                df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
+                                # Log warning if we get negative values
+                                time_rel_data = df_imu._data['time_rel']
+                                if len(time_rel_data) > 0 and float(np.min(time_rel_data)) < 0:
+                                    self.logger.warning(f"IMU time_rel has negative values! Min: {np.min(time_rel_data):.6f}s. Global ref: {self.timestamps_start}, IMU start: {self.timestamps_start_imu}")
                     else:
                         df_imu = None
                 except Exception as e:
@@ -457,7 +498,24 @@ class DataCollectionWidget(QWidget):
                     if ppg_data.size > 0:
                         df_ppg = self.make_dataframe(ppg_data, BrainFlowPresets.ANCILLARY_PRESET)
                         if not df_ppg.empty and 'timestamp' in df_ppg.columns:
-                            df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
+                            # Set timestamp reference for PPG
+                            if self.timestamps_start_ppg is None:
+                                timestamp_data = df_ppg._data['timestamp']
+                                self.timestamps_start_ppg = float(timestamp_data[0]) if len(timestamp_data) > 0 else None
+                                # Update global reference to earliest timestamp
+                                if self.timestamps_start_ppg is not None:
+                                    if self.timestamps_start is None or self.timestamps_start_ppg < self.timestamps_start:
+                                        old_ref = self.timestamps_start
+                                        self.timestamps_start = self.timestamps_start_ppg
+                                        self.logger.info(f"Updated global timestamp reference from {old_ref} to {self.timestamps_start} (PPG earlier)")
+                            
+                            # Calculate time_rel using the global reference
+                            if self.timestamps_start is not None:
+                                df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
+                                # Log warning if we get negative values
+                                time_rel_data = df_ppg._data['time_rel']
+                                if len(time_rel_data) > 0 and float(np.min(time_rel_data)) < 0:
+                                    self.logger.warning(f"PPG time_rel has negative values! Min: {np.min(time_rel_data):.6f}s. Global ref: {self.timestamps_start}, PPG start: {self.timestamps_start_ppg}")
                     else:
                         df_ppg = None
                 except Exception as e:

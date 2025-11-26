@@ -4,6 +4,7 @@ View Recording Widget - Handles viewing recorded data and metadata
 
 import pickle
 import logging
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
@@ -20,6 +21,8 @@ class MetadataWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.metadata_labels = {}
+        # Setup logger
+        self.logger = logging.getLogger('MusePy.ViewRecording.Metadata')
         self.setup_ui()
         
     def setup_ui(self):
@@ -90,13 +93,47 @@ class MetadataWidget(QWidget):
             if data_type in data_dict and not data_dict[data_type].empty:
                 sample_count = len(data_dict[data_type])
                 if 'time_rel' in data_dict[data_type].columns and len(data_dict[data_type]) > 1:
-                    time_diffs = data_dict[data_type]['time_rel'].diff().dropna()
-                    if len(time_diffs) > 0:
-                        avg_interval = time_diffs.mean()
-                        sampling_rate = 1.0 / avg_interval if avg_interval > 0 else 0
-                        metadata[f'{data_type.upper()} FS'] = f"{sampling_rate:.1f} Hz"
-                    duration = data_dict[data_type]['time_rel'].max() - data_dict[data_type]['time_rel'].min()
-                    metadata[f'{data_type.upper()} Duration'] = f"{duration:.2f}s"
+                    # Get time_rel values (handle FastDataFrame)
+                    time_rel_data = data_dict[data_type]._data['time_rel'] if hasattr(data_dict[data_type], '_data') else data_dict[data_type]['time_rel']
+                    
+                    # Check for negative values and log warning
+                    if hasattr(time_rel_data, '__getitem__'):
+                        min_time = float(np.min(time_rel_data))
+                        if min_time < 0:
+                            self.logger.warning(f"{data_type.upper()} has negative time_rel values! Min: {min_time:.6f}s. This indicates a timestamp synchronization issue.")
+                    else:
+                        min_time = float(min(time_rel_data)) if len(time_rel_data) > 0 else 0
+                        if min_time < 0:
+                            self.logger.warning(f"{data_type.upper()} has negative time_rel values! Min: {min_time:.6f}s. This indicates a timestamp synchronization issue.")
+                    
+                    # Calculate time differences (use all data, including negatives, to detect issues)
+                    if len(time_rel_data) > 1:
+                        # Sort to get proper differences
+                        sorted_times = np.sort(time_rel_data) if hasattr(time_rel_data, '__getitem__') else np.sort(np.array(time_rel_data))
+                        time_diffs = np.diff(sorted_times)
+                        # Only use positive differences for sampling rate calculation
+                        positive_diffs = time_diffs[time_diffs > 0]
+                        
+                        if len(positive_diffs) > 0:
+                            avg_interval = np.mean(positive_diffs)
+                            sampling_rate = 1.0 / avg_interval if avg_interval > 0 else 0
+                            metadata[f'{data_type.upper()} FS'] = f"{sampling_rate:.1f} Hz"
+                        else:
+                            metadata[f'{data_type.upper()} FS'] = "N/A"
+                        
+                        # Calculate duration (use min/max even if negative to show the issue)
+                        max_time = float(np.max(time_rel_data)) if hasattr(time_rel_data, '__getitem__') else float(max(time_rel_data))
+                        min_time = float(np.min(time_rel_data)) if hasattr(time_rel_data, '__getitem__') else float(min(time_rel_data))
+                        duration = max_time - min_time
+                        if duration > 0:
+                            metadata[f'{data_type.upper()} Duration'] = f"{duration:.2f}s"
+                            if min_time < 0:
+                                metadata[f'{data_type.upper()} Duration'] += f" (WARNING: negative start!)"
+                        else:
+                            metadata[f'{data_type.upper()} Duration'] = "N/A"
+                    else:
+                        metadata[f'{data_type.upper()} FS'] = "N/A"
+                        metadata[f'{data_type.upper()} Duration'] = "N/A"
                 metadata[f'{data_type.upper()} Samples'] = f"{sample_count:,}"
                     
         # Create labels for each metadata item
