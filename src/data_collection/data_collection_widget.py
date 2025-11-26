@@ -6,6 +6,8 @@ import pickle
 import time
 import logging
 import csv
+import io
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -69,21 +71,49 @@ class DataCollectionWidget(QWidget):
         # Don't call setup_control_panels here - it will be called by the main app
     
     def setup_logging(self):
-        """Setup logging to file in tmp folder"""
+        """Setup logging to file in tmp folder inside data folder"""
         try:
-            # Create tmp folder in the project directory
             from pathlib import Path
             import sys
             
-            if getattr(sys, 'frozen', False):
-                # Running as compiled executable
-                base_path = Path(sys.executable).parent
-            else:
-                # Running as script
-                base_path = Path(__file__).parent.parent.parent
+            # Get data folder path - try to get it from record_data_widget if available
+            # Otherwise try to load saved preference, then use default location
+            data_folder = None
+            if hasattr(self, 'record_data_widget') and self.record_data_widget:
+                try:
+                    data_folder = Path(self.record_data_widget.get_data_folder())
+                except:
+                    pass
             
-            tmp_folder = base_path / "tmp"
-            tmp_folder.mkdir(exist_ok=True)
+            # If not available, try to load saved preference
+            if data_folder is None or not data_folder.exists():
+                try:
+                    # Import get_config_path from record_data_widget (module-level function)
+                    from .record_data_widget import get_config_path
+                    config_path = get_config_path()
+                    prefs_file = config_path / "data_folder_preference.txt"
+                    if prefs_file.exists():
+                        with open(prefs_file, 'r', encoding='utf-8') as f:
+                            saved_path = f.read().strip()
+                        if saved_path and Path(saved_path).exists():
+                            data_folder = Path(saved_path)
+                except Exception:
+                    pass
+            
+            # If still not available, use default data folder location (same as RecordDataWidget)
+            if data_folder is None or not data_folder.exists():
+                # Use same logic as RecordDataWidget.get_resource_path()
+                if getattr(sys, 'frozen', False):
+                    # Running as compiled executable - resources are in the bundle
+                    resource_path = Path(sys._MEIPASS)
+                else:
+                    # Running as script
+                    resource_path = Path(__file__).parent.parent.parent
+                data_folder = resource_path / "data"
+            
+            # Create tmp folder inside data folder
+            tmp_folder = data_folder / "tmp"
+            tmp_folder.mkdir(parents=True, exist_ok=True)
             
             # Create log file with timestamp
             log_filename = f"musepy_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -316,8 +346,8 @@ class DataCollectionWidget(QWidget):
             csv_path = self.recording_folder / f"{self.recording_filename}_{data_type}.csv"
             self.logger.debug(f"Creating CSV file for {data_type}: {csv_path}")
             
-            # Open file in write mode
-            self.csv_files[data_type] = open(csv_path, 'w', newline='', buffering=1)  # Line buffering
+            # Open file in write mode with UTF-8 encoding and unbuffered mode for immediate writes
+            self.csv_files[data_type] = open(csv_path, 'w', newline='', encoding='utf-8', buffering=1)
             self.csv_writers[data_type] = csv.writer(self.csv_files[data_type])
             self.csv_headers_written[data_type] = False
             
@@ -331,7 +361,9 @@ class DataCollectionWidget(QWidget):
         
         for data_type, file_handle in self.csv_files.items():
             try:
+                # Ensure all data is written to disk
                 file_handle.flush()
+                os.fsync(file_handle.fileno())  # Force write to disk
                 file_handle.close()
                 self.logger.debug(f"Closed CSV file for {data_type}")
             except Exception as e:
@@ -479,6 +511,11 @@ class DataCollectionWidget(QWidget):
             
             # Flush to ensure data is written to disk
             self.csv_files[data_type].flush()
+            try:
+                os.fsync(self.csv_files[data_type].fileno())  # Force write to disk on Windows/Unix
+            except (OSError, io.UnsupportedOperation):
+                # Some file systems don't support fsync, that's okay
+                pass
             
             if rows_written > 0:
                 self.logger.debug(f"Wrote {rows_written} rows to {data_type} CSV")

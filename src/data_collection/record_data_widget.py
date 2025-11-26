@@ -86,6 +86,7 @@ class RecordDataWidget(QGroupBox):
         self.gdrive_folder_id = None
         
         self.setup_ui()
+        self.load_data_folder_preference()  # Load saved data folder path
         self.setup_connections()
         self.load_gdrive_settings()
         self.set_enabled(False)  # Initially disabled until device is connected
@@ -368,6 +369,35 @@ class RecordDataWidget(QGroupBox):
         )
         if folder:
             self.folder_edit.setText(folder)
+            self.save_data_folder_preference(folder)  # Save the selected folder
+    
+    def save_data_folder_preference(self, folder_path):
+        """Save the data folder path to preferences file"""
+        try:
+            config_path = get_config_path()
+            prefs_file = config_path / "data_folder_preference.txt"
+            with open(prefs_file, 'w', encoding='utf-8') as f:
+                f.write(str(folder_path))
+            self.logger.debug(f"Saved data folder preference: {folder_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save data folder preference: {e}")
+    
+    def load_data_folder_preference(self):
+        """Load the saved data folder path from preferences file"""
+        try:
+            config_path = get_config_path()
+            prefs_file = config_path / "data_folder_preference.txt"
+            if prefs_file.exists():
+                with open(prefs_file, 'r', encoding='utf-8') as f:
+                    saved_path = f.read().strip()
+                if saved_path and Path(saved_path).exists():
+                    self.folder_edit.setText(saved_path)
+                    self.logger.debug(f"Loaded data folder preference: {saved_path}")
+                    return
+            # If no preference file or path doesn't exist, use default
+            self.logger.debug("No saved data folder preference found, using default")
+        except Exception as e:
+            self.logger.warning(f"Failed to load data folder preference: {e}")
             
     def toggle_recording(self):
         """Toggle recording on/off"""
