@@ -497,16 +497,24 @@ class DataCollectionWidget(QWidget):
         try:
             writer = self.csv_writers[data_type]
             
+            # Reorder columns to ensure consistent order: original columns first, then time_rel at the end
+            original_columns = [col for col in df._columns if col != 'time_rel']
+            if 'time_rel' in df._columns:
+                ordered_columns = original_columns + ['time_rel']
+            else:
+                ordered_columns = original_columns
+            
             # Write header if not written yet
             if not self.csv_headers_written[data_type]:
-                writer.writerow(df.columns.tolist())
+                writer.writerow(ordered_columns)
                 self.csv_headers_written[data_type] = True
-                self.logger.debug(f"Wrote header for {data_type}: {df.columns.tolist()}")
+                self.logger.debug(f"Wrote header for {data_type}: {ordered_columns}")
             
-            # Write data rows
+            # Write data rows using the ordered columns
             rows_written = 0
-            for _, row in df.iterrows():
-                writer.writerow(row.tolist())
+            # FastDataFrame - iterate using zip with ordered columns
+            for row in zip(*[df._data[col] for col in ordered_columns]):
+                writer.writerow(row)
                 rows_written += 1
             
             # Flush to ensure data is written to disk
