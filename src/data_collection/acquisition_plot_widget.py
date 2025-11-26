@@ -167,22 +167,67 @@ class AcquisitionPlotWidget(QWidget):
         self.stream_data = data
         self.is_showing_recording = False
         
+        # Determine time data - prefer time_rel, fallback to calculating from timestamp
+        # IMPORTANT: Always use relative time, never absolute timestamps for plotting
+        if 'time_rel' in data.columns:
+            # Use time_rel if available
+            time_data = data['time_rel']
+            # Convert to numpy array for FastDataFrame
+            if hasattr(time_data, '_data'):
+                time_data = time_data._data
+        elif 'timestamp' in data.columns:
+            # Calculate relative time from timestamp if time_rel not available
+            timestamp_data = data['timestamp']
+            if hasattr(timestamp_data, '_data'):
+                # FastDataFrame - get the data array
+                timestamp_array = timestamp_data._data
+                min_timestamp = float(np.min(timestamp_array))
+                time_data = timestamp_array - min_timestamp
+            else:
+                # Regular array/Series
+                timestamp_array = np.array(timestamp_data)
+                min_timestamp = float(np.min(timestamp_array))
+                time_data = timestamp_array - min_timestamp
+        else:
+            # No time data available, use sample indices
+            time_data = np.arange(len(data))
+        
         # Update each channel
         for channel in self.channel_names:
-            if channel in data.columns and 'time_rel' in data.columns:
-                time_data = data['time_rel']
+            if channel in data.columns:
                 channel_data = data[channel]
                 
                 # Convert to numpy arrays for PyQtGraph compatibility
-                time_array = time_data.to_numpy() if hasattr(time_data, 'to_numpy') else time_data
-                channel_array = channel_data.to_numpy() if hasattr(channel_data, 'to_numpy') else channel_data
+                # time_data should already be a numpy array at this point
+                if isinstance(time_data, np.ndarray):
+                    time_array = time_data
+                elif hasattr(time_data, 'to_numpy'):
+                    time_array = time_data.to_numpy()
+                elif hasattr(time_data, '_data'):
+                    time_array = np.array(time_data._data)
+                else:
+                    time_array = np.array(time_data)
+                    
+                if hasattr(channel_data, 'to_numpy'):
+                    channel_array = channel_data.to_numpy()
+                elif hasattr(channel_data, '_data'):
+                    channel_array = np.array(channel_data._data)
+                else:
+                    channel_array = np.array(channel_data)
                 
                 # Update curve data
                 self.curves[channel].setData(time_array, channel_array)
                 
         # Update plot range to show last N seconds
-        if 'time_rel' in data.columns and len(data) > 0:
-            last_time = data['time_rel'].max()
+        if len(data) > 0:
+            # time_data should be a numpy array at this point
+            if isinstance(time_data, np.ndarray):
+                last_time = float(np.max(time_data))
+            elif hasattr(time_data, 'max'):
+                last_time = float(time_data.max())
+            else:
+                last_time = float(len(time_data) - 1)
+                
             start_time = max(0, last_time - self.plot_interval)
             self.plot_item.setXRange(start_time, last_time, padding=0)
             
