@@ -443,49 +443,35 @@ class DataCollectionWidget(QWidget):
                     return
                     
                 # Set timestamp reference for EEG
-                if self.timestamps_start_eeg is None and not df_eeg.empty and 'timestamp' in df_eeg.columns:
-                    # FastDataFrame: access first timestamp value
+                if self.timestamps_start_eeg is None:
                     timestamp_data = df_eeg._data['timestamp']
-                    self.timestamps_start_eeg = float(timestamp_data[0]) if len(timestamp_data) > 0 else None
-                    if self.timestamps_start_eeg is not None:
+                    if len(timestamp_data) > 0:
+                        self.timestamps_start_eeg = float(timestamp_data[0])
                         self.logger.info(f"First EEG data received at timestamp: {self.timestamps_start_eeg}")
                         # Update global reference to earliest timestamp
                         if self.timestamps_start is None or self.timestamps_start_eeg < self.timestamps_start:
                             self.timestamps_start = self.timestamps_start_eeg
-                            self.logger.info(f"Updated global timestamp reference to: {self.timestamps_start}")
                 
-                # Calculate time_rel using the global reference (earliest timestamp across all types)
-                if self.timestamps_start is not None:
-                    df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamps_start
-                    # Log warning if we get negative values
-                    time_rel_data = df_eeg._data['time_rel']
-                    if len(time_rel_data) > 0 and float(np.min(time_rel_data)) < 0:
-                        self.logger.warning(f"EEG time_rel has negative values! Min: {np.min(time_rel_data):.6f}s. Global ref: {self.timestamps_start}, EEG start: {self.timestamps_start_eeg}")
+                # Calculate time_rel using the global reference
+                df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamps_start
                 
                 # Get IMU data
                 try:
                     imu_data = self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
                     if imu_data.size > 0:
                         df_imu = self.make_dataframe(imu_data, BrainFlowPresets.AUXILIARY_PRESET)
-                        if not df_imu.empty and 'timestamp' in df_imu.columns:
+                        if not df_imu.empty:
                             # Set timestamp reference for IMU
                             if self.timestamps_start_imu is None:
                                 timestamp_data = df_imu._data['timestamp']
-                                self.timestamps_start_imu = float(timestamp_data[0]) if len(timestamp_data) > 0 else None
-                                # Update global reference to earliest timestamp
-                                if self.timestamps_start_imu is not None:
+                                if len(timestamp_data) > 0:
+                                    self.timestamps_start_imu = float(timestamp_data[0])
+                                    # Update global reference to earliest timestamp
                                     if self.timestamps_start is None or self.timestamps_start_imu < self.timestamps_start:
-                                        old_ref = self.timestamps_start
                                         self.timestamps_start = self.timestamps_start_imu
-                                        self.logger.info(f"Updated global timestamp reference from {old_ref} to {self.timestamps_start} (IMU earlier)")
                             
                             # Calculate time_rel using the global reference
-                            if self.timestamps_start is not None:
-                                df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
-                                # Log warning if we get negative values
-                                time_rel_data = df_imu._data['time_rel']
-                                if len(time_rel_data) > 0 and float(np.min(time_rel_data)) < 0:
-                                    self.logger.warning(f"IMU time_rel has negative values! Min: {np.min(time_rel_data):.6f}s. Global ref: {self.timestamps_start}, IMU start: {self.timestamps_start_imu}")
+                            df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
                     else:
                         df_imu = None
                 except Exception as e:
@@ -497,25 +483,18 @@ class DataCollectionWidget(QWidget):
                     ppg_data = self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
                     if ppg_data.size > 0:
                         df_ppg = self.make_dataframe(ppg_data, BrainFlowPresets.ANCILLARY_PRESET)
-                        if not df_ppg.empty and 'timestamp' in df_ppg.columns:
+                        if not df_ppg.empty:
                             # Set timestamp reference for PPG
                             if self.timestamps_start_ppg is None:
                                 timestamp_data = df_ppg._data['timestamp']
-                                self.timestamps_start_ppg = float(timestamp_data[0]) if len(timestamp_data) > 0 else None
-                                # Update global reference to earliest timestamp
-                                if self.timestamps_start_ppg is not None:
+                                if len(timestamp_data) > 0:
+                                    self.timestamps_start_ppg = float(timestamp_data[0])
+                                    # Update global reference to earliest timestamp
                                     if self.timestamps_start is None or self.timestamps_start_ppg < self.timestamps_start:
-                                        old_ref = self.timestamps_start
                                         self.timestamps_start = self.timestamps_start_ppg
-                                        self.logger.info(f"Updated global timestamp reference from {old_ref} to {self.timestamps_start} (PPG earlier)")
                             
                             # Calculate time_rel using the global reference
-                            if self.timestamps_start is not None:
-                                df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
-                                # Log warning if we get negative values
-                                time_rel_data = df_ppg._data['time_rel']
-                                if len(time_rel_data) > 0 and float(np.min(time_rel_data)) < 0:
-                                    self.logger.warning(f"PPG time_rel has negative values! Min: {np.min(time_rel_data):.6f}s. Global ref: {self.timestamps_start}, PPG start: {self.timestamps_start_ppg}")
+                            df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
                     else:
                         df_ppg = None
                 except Exception as e:
@@ -525,9 +504,9 @@ class DataCollectionWidget(QWidget):
             # Write data to CSV files incrementally if recording
             if self.is_recording:
                 self.write_data_to_csv('eeg', df_eeg)
-                if df_imu is not None and not df_imu.empty:
+                if df_imu is not None:
                     self.write_data_to_csv('imu', df_imu)
-                if df_ppg is not None and not df_ppg.empty:
+                if df_ppg is not None:
                     self.write_data_to_csv('ppg', df_ppg)
             
             # Update stream data for plotting (only EEG for now)
@@ -549,45 +528,32 @@ class DataCollectionWidget(QWidget):
             return
         
         if data_type not in self.csv_writers:
-            self.logger.warning(f"CSV writer not available for {data_type}")
             return
         
+        writer = self.csv_writers[data_type]
+        
+        # Reorder columns: original columns first, then time_rel at the end
+        original_columns = [col for col in df._columns if col != 'time_rel']
+        if 'time_rel' in df._columns:
+            ordered_columns = original_columns + ['time_rel']
+        else:
+            ordered_columns = original_columns
+        
+        # Write header if not written yet
+        if not self.csv_headers_written[data_type]:
+            writer.writerow(ordered_columns)
+            self.csv_headers_written[data_type] = True
+        
+        # Write data rows
+        for row in zip(*[df._data[col] for col in ordered_columns]):
+            writer.writerow(row)
+        
+        # Flush to ensure data is written to disk
+        self.csv_files[data_type].flush()
         try:
-            writer = self.csv_writers[data_type]
-            
-            # Reorder columns to ensure consistent order: original columns first, then time_rel at the end
-            original_columns = [col for col in df._columns if col != 'time_rel']
-            if 'time_rel' in df._columns:
-                ordered_columns = original_columns + ['time_rel']
-            else:
-                ordered_columns = original_columns
-            
-            # Write header if not written yet
-            if not self.csv_headers_written[data_type]:
-                writer.writerow(ordered_columns)
-                self.csv_headers_written[data_type] = True
-                self.logger.debug(f"Wrote header for {data_type}: {ordered_columns}")
-            
-            # Write data rows using the ordered columns
-            rows_written = 0
-            # FastDataFrame - iterate using zip with ordered columns
-            for row in zip(*[df._data[col] for col in ordered_columns]):
-                writer.writerow(row)
-                rows_written += 1
-            
-            # Flush to ensure data is written to disk
-            self.csv_files[data_type].flush()
-            try:
-                os.fsync(self.csv_files[data_type].fileno())  # Force write to disk on Windows/Unix
-            except (OSError, io.UnsupportedOperation):
-                # Some file systems don't support fsync, that's okay
-                pass
-            
-            if rows_written > 0:
-                self.logger.debug(f"Wrote {rows_written} rows to {data_type} CSV")
-                
-        except Exception as e:
-            self.logger.error(f"Error writing to {data_type} CSV: {e}", exc_info=True)
+            os.fsync(self.csv_files[data_type].fileno())
+        except (OSError, io.UnsupportedOperation):
+            pass
     
     def make_dataframe(self, data, preset):
         """Create DataFrame from raw board data"""
@@ -613,44 +579,3 @@ class DataCollectionWidget(QWidget):
             print(f"Error getting board data: {str(e)}")
             return pd.DataFrame()
             
-    def save_recording(self, filename, description=""):
-        """Save the current recording"""
-        if not self.recorded_data:
-            return False
-            
-        try:
-            # Get data folder from record widget
-            data_folder = self.record_data_widget.get_data_folder()
-            subject_id = self.record_data_widget.get_subject_id()
-            
-            # Create subject folder if ID is provided
-            if subject_id:
-                save_folder = Path(data_folder) / subject_id
-            else:
-                save_folder = Path(data_folder)
-                
-            save_folder.mkdir(parents=True, exist_ok=True)
-            
-            # Save CSV files
-            for key, df in self.recorded_data.items():
-                if isinstance(df, pd.DataFrame) and not df.empty:
-                    csv_path = save_folder / f"{filename}_{key}.csv"
-                    df.to_csv(csv_path, index=False)
-                    
-            # Save combined data file
-            data_path = save_folder / f"{filename}.data"
-            with open(data_path, 'wb') as f:
-                pickle.dump(self.recorded_data, f)
-                
-            # Save description if provided
-            if description:
-                desc_path = save_folder / f"{filename}_description.txt"
-                with open(desc_path, 'w') as f:
-                    f.write(description)
-                    
-            print(f"Recording saved: {filename}")
-            return str(data_path)
-            
-        except Exception as e:
-            print(f"Error saving recording: {str(e)}")
-            return False

@@ -343,9 +343,9 @@ class ViewRecordingWidget(QGroupBox):
         csv_file_path = Path(csv_file_path)
         folder = csv_file_path.parent
         
-        # Extract base filename (remove _eeg, _imu, _ppg, or _combined suffix)
+        # Extract base filename (remove _eeg, _imu, _ppg suffix)
         filename = csv_file_path.stem
-        for suffix in ['_eeg', '_imu', '_ppg', '_combined']:
+        for suffix in ['_eeg', '_imu', '_ppg']:
             if filename.endswith(suffix):
                 filename = filename[:-len(suffix)]
                 break
@@ -357,12 +357,6 @@ class ViewRecordingWidget(QGroupBox):
         if data_file_path.exists():
             self.logger.info(f".data file already exists: {data_file_path}")
             return data_file_path
-        
-        # Check if combined CSV exists - if yes, just need to create .data from it
-        combined_csv_path = folder / f"{filename}_combined.csv"
-        if combined_csv_path.exists():
-            self.logger.info(f"Combined CSV exists, creating .data from it: {combined_csv_path}")
-            return self.create_data_from_combined_csv(folder, filename, combined_csv_path)
         
         # Check if all three base CSV files exist
         eeg_path = folder / f"{filename}_eeg.csv"
@@ -396,49 +390,9 @@ class ViewRecordingWidget(QGroupBox):
         self.logger.info("All three base CSV files found. Reconstructing .data file...")
         return self.reconstruct_data_file(folder, filename, eeg_path, imu_path, ppg_path)
     
-    def create_data_from_combined_csv(self, folder, filename, combined_csv_path):
-        """Create .data file from existing combined CSV"""
-        try:
-            self.logger.info(f"Reading combined CSV: {combined_csv_path}")
-            combined_df = pd.read_csv(combined_csv_path)
-            
-            # For now, treat the combined data as EEG data
-            # In the future, could split it back into EEG, IMU, PPG
-            recorded_data = {
-                'eeg': combined_df,
-                'metadata': {
-                    'filename': filename,
-                    'subject_id': '',
-                    'description': 'Reconstructed from combined CSV',
-                    'recording_duration': 0,
-                    'timestamp': datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
-                    'reconstructed': True
-                }
-            }
-            
-            # Save .data file
-            data_path = folder / f"{filename}.data"
-            with open(data_path, 'wb') as f:
-                pickle.dump(recorded_data, f)
-            
-            self.logger.info(f"Created .data file from combined CSV: {data_path}")
-            QMessageBox.information(
-                self, 
-                "File Reconstructed", 
-                f"Successfully created .data file from combined CSV:\n{data_path}"
-            )
-            
-            return data_path
-            
-        except Exception as e:
-            error_msg = f"Failed to create .data file from combined CSV: {str(e)}"
-            self.logger.error(error_msg, exc_info=True)
-            QMessageBox.critical(self, "Error", error_msg)
-            return None
-    
     def reconstruct_data_file(self, folder, filename, eeg_path, imu_path, ppg_path):
         """
-        Reconstruct .data file and combined CSV from the three base CSV files.
+        Reconstruct .data file from the three base CSV files.
         This is the recovery feature for when the app froze during recording.
         """
         try:
@@ -455,44 +409,6 @@ class ViewRecordingWidget(QGroupBox):
             ppg_df = pd.read_csv(ppg_path)
             
             self.logger.info(f"Loaded: EEG={len(eeg_df)} rows, IMU={len(imu_df)} rows, PPG={len(ppg_df)} rows")
-            
-            # Create combined CSV
-            combined_df = None
-            
-            # Start with EEG as base
-            if not eeg_df.empty:
-                combined_df = eeg_df.copy()
-                self.logger.debug(f"Base EEG data: {len(combined_df)} rows")
-            
-            # Merge IMU data
-            if not imu_df.empty and combined_df is not None:
-                if 'timestamp' in combined_df.columns and 'timestamp' in imu_df.columns:
-                    combined_df = pd.merge_asof(
-                        combined_df.sort_values('timestamp'),
-                        imu_df.sort_values('timestamp'),
-                        on='timestamp',
-                        direction='nearest',
-                        suffixes=('', '_imu')
-                    )
-                    self.logger.debug(f"Merged IMU data: {len(imu_df)} rows")
-            
-            # Merge PPG data
-            if not ppg_df.empty and combined_df is not None:
-                if 'timestamp' in combined_df.columns and 'timestamp' in ppg_df.columns:
-                    combined_df = pd.merge_asof(
-                        combined_df.sort_values('timestamp'),
-                        ppg_df.sort_values('timestamp'),
-                        on='timestamp',
-                        direction='nearest',
-                        suffixes=('', '_ppg')
-                    )
-                    self.logger.debug(f"Merged PPG data: {len(ppg_df)} rows")
-            
-            # Save combined CSV
-            if combined_df is not None and not combined_df.empty:
-                combined_csv_path = folder / f"{filename}_combined.csv"
-                combined_df.to_csv(combined_csv_path, index=False)
-                self.logger.info(f"Created combined CSV: {combined_csv_path} ({len(combined_df)} rows)")
             
             # Calculate recording duration
             recording_duration = 0
@@ -528,10 +444,9 @@ class ViewRecordingWidget(QGroupBox):
             QMessageBox.information(
                 self, 
                 "File Reconstructed", 
-                f"Successfully reconstructed .data file and combined CSV from base CSV files:\n\n"
+                f"Successfully reconstructed .data file from base CSV files:\n\n"
                 f"Created:\n"
-                f"  • {filename}.data\n"
-                f"  • {filename}_combined.csv\n\n"
+                f"  • {filename}.data\n\n"
                 f"This recording can now be viewed normally."
             )
             

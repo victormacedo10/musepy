@@ -443,6 +443,38 @@ class FastDataFrame:
         """Get rows by integer position (pandas-style iloc)"""
         return ILocIndexer(self)
     
+    def sort_values(self, by, ascending=True):
+        """Sort DataFrame by one or more columns"""
+        if self.empty:
+            return self.copy()
+        
+        if isinstance(by, str):
+            by = [by]
+        
+        # Get sort keys
+        sort_keys = []
+        for col in by:
+            if col not in self._columns:
+                raise KeyError(f"Column '{col}' not found")
+            sort_keys.append(self._data[col])
+        
+        # Create indices for sorting
+        if len(sort_keys) == 1:
+            sort_indices = np.argsort(sort_keys[0], kind='mergesort')
+        else:
+            # Multi-column sort
+            sort_indices = np.lexsort([sort_keys[i] for i in range(len(sort_keys)-1, -1, -1)])
+        
+        if not ascending:
+            sort_indices = sort_indices[::-1]
+        
+        # Create sorted result
+        result_data = {}
+        for col in self._columns:
+            result_data[col] = self._data[col][sort_indices]
+        
+        return FastDataFrame(result_data)
+    
     def to_numpy(self):
         """Convert DataFrame to numpy array"""
         if self.empty:
@@ -658,6 +690,94 @@ def read_csv(filepath: str, **kwargs) -> FastDataFrame:
     return FastDataFrame(data)
 
 
+def merge_asof(left: FastDataFrame, right: FastDataFrame, on: str, 
+               direction: str = 'backward', suffixes: tuple = ('', '_right')) -> FastDataFrame:
+    """
+    Perform an asof merge (forward-fill merge) between two FastDataFrames
+    
+    Args:
+        left: Left FastDataFrame (should be sorted by 'on' column)
+        right: Right FastDataFrame (should be sorted by 'on' column)
+        on: Column name to merge on (must exist in both DataFrames)
+        direction: 'backward', 'forward', or 'nearest' (default: 'backward')
+        suffixes: Tuple of suffixes for overlapping columns (default: ('', '_right'))
+    
+    Returns:
+        Merged FastDataFrame
+    """
+    if left.empty:
+        return FastDataFrame()
+    if right.empty:
+        return left.copy()
+    
+    if on not in left.columns or on not in right.columns:
+        raise ValueError(f"Column '{on}' not found in both DataFrames")
+    
+    # Get the key columns as numpy arrays
+    left_keys = np.array(left._data[on])
+    right_keys = np.array(right._data[on])
+    
+    # Find matching indices for each left key
+    result_data = {}
+    
+    # Copy all columns from left DataFrame
+    for col in left.columns:
+        result_data[col] = left._data[col].copy()
+    
+    # Find matches and merge right DataFrame columns
+    for col in right.columns:
+        if col == on:
+            # Skip the key column (already in result)
+            continue
+        
+        # Determine the result column name (handle suffixes)
+        if col in left.columns:
+            result_col = f"{col}{suffixes[1]}" if suffixes[1] else f"{col}_right"
+        else:
+            result_col = col
+        
+        # Get the right column data
+        right_col_data = right._data[col]
+        right_dtype = right_col_data.dtype
+        
+        # Initialize result column with appropriate dtype and NaN values
+        if np.issubdtype(right_dtype, np.number):
+            result_values = np.full(len(left_keys), np.nan, dtype=right_dtype)
+        else:
+            # For non-numeric types, use object dtype
+            result_values = np.full(len(left_keys), None, dtype=object)
+        
+        # For each left key, find the matching right value
+        for i, left_key in enumerate(left_keys):
+            if direction == 'nearest':
+                # Find the nearest match
+                diffs = np.abs(right_keys - left_key)
+                nearest_idx = np.argmin(diffs)
+                result_values[i] = right_col_data[nearest_idx]
+            elif direction == 'backward':
+                # Find the last right key <= left key
+                mask = right_keys <= left_key
+                if np.any(mask):
+                    # Get the last matching index
+                    matching_indices = np.where(mask)[0]
+                    nearest_idx = matching_indices[-1]
+                    result_values[i] = right_col_data[nearest_idx]
+            elif direction == 'forward':
+                # Find the first right key >= left key
+                mask = right_keys >= left_key
+                if np.any(mask):
+                    # Get the first matching index
+                    matching_indices = np.where(mask)[0]
+                    nearest_idx = matching_indices[0]
+                    result_values[i] = right_col_data[nearest_idx]
+            else:
+                raise ValueError(f"Unsupported direction: {direction}")
+        
+        result_data[result_col] = result_values
+    
+    return FastDataFrame(result_data)
+
+
 def concat(dataframes: List[FastDataFrame], ignore_index: bool = False) -> FastDataFrame:
     """
     Concatenate multiple FastDataFrames
@@ -713,5 +833,9 @@ class PandasCompat:
     @staticmethod
     def concat(dataframes, ignore_index=False):
         return concat(dataframes, ignore_index)
+    
+    @staticmethod
+    def merge_asof(left, right, on, direction='backward', suffixes=('', '_right')):
+        return merge_asof(left, right, on, direction, suffixes)
 
 pd = PandasCompat()

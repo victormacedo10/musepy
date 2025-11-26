@@ -6,6 +6,7 @@ import sys
 import pickle
 import io
 import logging
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
@@ -540,63 +541,7 @@ class RecordDataWidget(QGroupBox):
             save_folder.mkdir(parents=True, exist_ok=True)
             self.logger.debug(f"Save folder: {save_folder}")
             
-            # Merge EEG, IMU, and PPG into a single combined CSV
-            try:
-                self.logger.info("Merging EEG, IMU, and PPG data into combined CSV...")
-                combined_df = None
-                
-                # Start with EEG data as the base
-                if 'eeg' in recorded_data and isinstance(recorded_data['eeg'], pd.DataFrame):
-                    combined_df = recorded_data['eeg'].copy()
-                    self.logger.debug(f"Base EEG data: {len(combined_df)} rows")
-                
-                # Merge IMU data if available (based on timestamp or time_rel)
-                if 'imu' in recorded_data and isinstance(recorded_data['imu'], pd.DataFrame):
-                    imu_df = recorded_data['imu']
-                    if combined_df is not None and not imu_df.empty:
-                        # Merge on timestamp or time_rel if available
-                        if 'timestamp' in combined_df.columns and 'timestamp' in imu_df.columns:
-                            combined_df = pd.merge_asof(
-                                combined_df.sort_values('timestamp'),
-                                imu_df.sort_values('timestamp'),
-                                on='timestamp',
-                                direction='nearest',
-                                suffixes=('', '_imu')
-                            )
-                            self.logger.debug(f"Merged IMU data: {len(imu_df)} rows")
-                        else:
-                            self.logger.warning("Cannot merge IMU data: missing timestamp column")
-                
-                # Merge PPG data if available
-                if 'ppg' in recorded_data and isinstance(recorded_data['ppg'], pd.DataFrame):
-                    ppg_df = recorded_data['ppg']
-                    if combined_df is not None and not ppg_df.empty:
-                        # Merge on timestamp or time_rel if available
-                        if 'timestamp' in combined_df.columns and 'timestamp' in ppg_df.columns:
-                            combined_df = pd.merge_asof(
-                                combined_df.sort_values('timestamp'),
-                                ppg_df.sort_values('timestamp'),
-                                on='timestamp',
-                                direction='nearest',
-                                suffixes=('', '_ppg')
-                            )
-                            self.logger.debug(f"Merged PPG data: {len(ppg_df)} rows")
-                        else:
-                            self.logger.warning("Cannot merge PPG data: missing timestamp column")
-                
-                # Save the combined CSV
-                if combined_df is not None and not combined_df.empty:
-                    combined_csv_path = save_folder / f"{filename}_combined.csv"
-                    combined_df.to_csv(combined_csv_path, index=False)
-                    self.logger.info(f"Saved combined CSV: {combined_csv_path} ({len(combined_df)} rows)")
-                else:
-                    self.logger.warning("No data to save in combined CSV")
-                    
-            except Exception as e:
-                self.logger.error(f"Error creating combined CSV: {e}", exc_info=True)
-            
-            # Save individual CSV files are already saved incrementally by data_collection_widget
-            # Just log that they exist
+            # Individual CSV files are already saved incrementally by data_collection_widget
             for key in ['eeg', 'imu', 'ppg']:
                 csv_path = save_folder / f"{filename}_{key}.csv"
                 if csv_path.exists():
@@ -649,17 +594,26 @@ class RecordDataWidget(QGroupBox):
             return False
             
     def update_timer(self):
-        """Update the recording timer display"""
-        if self.recording_start_time:
-            # Try to get time from streaming data first
-            if self.parent and hasattr(self.parent, 'stream_data') and not self.parent.stream_data.empty:
-                if 'time_rel' in self.parent.stream_data.columns:
-                    max_time = self.parent.stream_data['time_rel'].max()
+        """Update the recording timer display using relative time from stream data"""
+        if self.parent and hasattr(self.parent, 'stream_data') and not self.parent.stream_data.empty:
+            if 'time_rel' in self.parent.stream_data.columns:
+                # Get max time_rel from stream data
+                time_rel_data = self.parent.stream_data._data['time_rel']
+                if len(time_rel_data) > 0:
+                    max_time = float(np.max(time_rel_data))
                     if max_time > 0:
                         hours, remainder = divmod(int(round(max_time)), 3600)
                         minutes, seconds = divmod(remainder, 60)
                         self.timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}s")
                         return
+        
+        # Fallback to elapsed time if stream data not available
+        if self.recording_start_time:
+            elapsed = datetime.now() - self.recording_start_time
+            total_seconds = int(elapsed.total_seconds())
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            self.timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}s")
             
     def get_recording_duration(self):
         """Get the recording duration in seconds"""
