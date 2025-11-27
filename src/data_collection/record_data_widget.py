@@ -597,17 +597,17 @@ class RecordDataWidget(QGroupBox):
         """Update the recording timer display using relative time from stream data"""
         if self.parent and hasattr(self.parent, 'stream_data') and not self.parent.stream_data.empty:
             if 'time_rel' in self.parent.stream_data.columns:
-                # Get max time_rel from stream data
-                time_rel_data = self.parent.stream_data._data['time_rel']
-                if len(time_rel_data) > 0:
-                    max_time = float(np.max(time_rel_data))
-                    if max_time > 0:
-                        hours, remainder = divmod(int(round(max_time)), 3600)
-                        minutes, seconds = divmod(remainder, 60)
-                        self.timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}s")
-                        return
-        
-        # Fallback to elapsed time if stream data not available
+                time_rel_data = np.array(self.parent.stream_data._data['time_rel'], dtype=float)
+                if time_rel_data.size > 0:
+                    elapsed = time_rel_data[-1] - time_rel_data[0]
+                    if elapsed < 0:
+                        elapsed = 0
+                    hours, remainder = divmod(int(round(elapsed)), 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    self.timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}s")
+                    return
+
+        # Fallback to elapsed wall-clock time if stream data not available
         if self.recording_start_time:
             elapsed = datetime.now() - self.recording_start_time
             total_seconds = int(elapsed.total_seconds())

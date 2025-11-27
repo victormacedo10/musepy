@@ -167,20 +167,25 @@ class AcquisitionPlotWidget(QWidget):
         self.stream_data = data
         self.is_showing_recording = False
         
-        # Get time_rel data (should always be present during streaming)
-        time_data = data._data['time_rel']
+        # Get time_rel data (should always be present during streaming) and normalize to start at 0
+        time_rel_values = np.array(data._data['time_rel'], dtype=float)
+        if time_rel_values.size == 0:
+            return
+
+        # Normalize so the first sample starts at 0 seconds (guards against absolute timestamps)
+        time_offset = time_rel_values[0]
+        time_data = time_rel_values - time_offset
         
         # Update each channel
         for channel in self.channel_names:
             if channel in data.columns:
-                channel_data = data._data[channel]
+                channel_data = np.array(data._data[channel], dtype=float)
                 self.curves[channel].setData(time_data, channel_data)
                 
         # Update plot range to show last N seconds
-        if len(data) > 0:
-            last_time = float(np.max(time_data))
-            start_time = max(0, last_time - self.plot_interval)
-            self.plot_item.setXRange(start_time, last_time, padding=0)
+        last_time = float(time_data[-1])
+        start_time = max(0.0, last_time - self.plot_interval)
+        self.plot_item.setXRange(start_time, last_time, padding=0)
             
     def display_recording_data(self, data_dict):
         """Display recorded data in the plot"""
