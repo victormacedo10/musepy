@@ -453,6 +453,18 @@ class DataCollectionWidget(QWidget):
                             self.timestamps_start = self.timestamps_start_eeg
                 
                 # Calculate time_rel using the global reference
+                # Ensure timestamps_start is set before calculation
+                if self.timestamps_start is None:
+                    # Fallback: use first timestamp in current data as reference
+                    timestamp_data = df_eeg._data['timestamp']
+                    if len(timestamp_data) > 0:
+                        self.timestamps_start = float(timestamp_data[0])
+                        self.logger.warning(f"timestamps_start was None, using first EEG timestamp as reference: {self.timestamps_start}")
+                    else:
+                        # No data available, set time_rel to zeros
+                        df_eeg['time_rel'] = np.zeros(len(df_eeg))
+                        return
+                
                 df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamps_start
                 
                 # Get IMU data
@@ -471,7 +483,19 @@ class DataCollectionWidget(QWidget):
                                         self.timestamps_start = self.timestamps_start_imu
                             
                             # Calculate time_rel using the global reference
-                            df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
+                            # Ensure timestamps_start is set before calculation
+                            if self.timestamps_start is None:
+                                # Fallback: use first timestamp in current data as reference
+                                timestamp_data = df_imu._data['timestamp']
+                                if len(timestamp_data) > 0:
+                                    self.timestamps_start = float(timestamp_data[0])
+                                    self.logger.warning(f"timestamps_start was None, using first IMU timestamp as reference: {self.timestamps_start}")
+                                else:
+                                    # No data available, skip this batch
+                                    df_imu = None
+                            
+                            if df_imu is not None:
+                                df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
                     else:
                         df_imu = None
                 except Exception as e:
@@ -494,7 +518,19 @@ class DataCollectionWidget(QWidget):
                                         self.timestamps_start = self.timestamps_start_ppg
                             
                             # Calculate time_rel using the global reference
-                            df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
+                            # Ensure timestamps_start is set before calculation
+                            if self.timestamps_start is None:
+                                # Fallback: use first timestamp in current data as reference
+                                timestamp_data = df_ppg._data['timestamp']
+                                if len(timestamp_data) > 0:
+                                    self.timestamps_start = float(timestamp_data[0])
+                                    self.logger.warning(f"timestamps_start was None, using first PPG timestamp as reference: {self.timestamps_start}")
+                                else:
+                                    # No data available, skip this batch
+                                    df_ppg = None
+                            
+                            if df_ppg is not None:
+                                df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
                     else:
                         df_ppg = None
                 except Exception as e:

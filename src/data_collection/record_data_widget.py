@@ -13,11 +13,13 @@ from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, 
     QLabel, QTextEdit, QFileDialog, QMessageBox, QScrollArea, QWidget
 )
-from PySide6.QtCore import Signal, QTimer, Qt
+from PySide6.QtCore import Signal, QTimer, Qt, QThread
 from PySide6.QtGui import QPixmap, QIcon
 from ..utils import pd
 
 # Google Drive imports
+GOOGLE_DRIVE_AVAILABLE = False
+GOOGLE_DRIVE_IMPORT_ERROR = None
 try:
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
@@ -27,8 +29,10 @@ try:
     from googleapiclient.http import MediaIoBaseUpload
     GOOGLE_DRIVE_AVAILABLE = True
     SCOPES = ['https://www.googleapis.com/auth/drive.file']
-except ImportError:
+except ImportError as e:
     GOOGLE_DRIVE_AVAILABLE = False
+    GOOGLE_DRIVE_IMPORT_ERROR = str(e)
+    print(f"Google Drive libraries not available: {e}")
 
 
 def get_resource_path():
@@ -58,6 +62,114 @@ def get_config_path():
         return Path(__file__).parent.parent.parent / 'google_drive'
 
 
+class GDriveAuthWorker(QThread):
+    """Worker thread for Google Drive authentication to avoid blocking UI"""
+    authentication_complete = Signal(object)  # Emits service object or None
+    authentication_failed = Signal(str)  # Emits error message
+    
+    def __init__(self, credentials_file, token_file, scopes, parent=None):
+        super().__init__(parent)
+        self.credentials_file = credentials_file
+        self.token_file = token_file
+        self.scopes = scopes
+        # Setup logger
+        self.logger = logging.getLogger('MusePy.GDriveAuth')
+        self.logger.setLevel(logging.DEBUG)
+        
+    def run(self):
+        """Run authentication in background thread"""
+        try:
+            self.logger.info("Starting Google Drive authentication worker thread")
+            creds = None
+            
+            # Check for existing token
+            if self.token_file.exists():
+                self.logger.debug(f"Found existing token file: {self.token_file}")
+                try:
+                    creds = Credentials.from_authorized_user_file(str(self.token_file), self.scopes)
+                    self.logger.debug(f"Loaded credentials from token file. Valid: {creds.valid if creds else False}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to load credentials from token file: {e}")
+                    creds = None
+            else:
+                self.logger.debug("No existing token file found")
+            
+            # If there are no (valid) credentials available, let the user log in
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    self.logger.info("Credentials expired, attempting to refresh...")
+                    try:
+                        creds.refresh(Request())
+                        self.logger.info("Successfully refreshed credentials")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to refresh credentials: {e}, need to re-authenticate")
+                        # Refresh failed, need to re-authenticate
+                        creds = None
+                
+                if not creds:
+                    # Need to authenticate via browser
+                    self.logger.info("No valid credentials, starting browser authentication...")
+                    self.logger.debug(f"Credentials file: {self.credentials_file}")
+                    self.logger.debug(f"Credentials file exists: {self.credentials_file.exists()}")
+                    
+                    if not self.credentials_file.exists():
+                        error_msg = f"Credentials file not found: {self.credentials_file}"
+                        self.logger.error(error_msg)
+                        self.authentication_failed.emit(error_msg)
+                        return
+                    
+                    try:
+                        self.logger.info("Creating OAuth flow and opening browser...")
+                        flow = InstalledAppFlow.from_client_secrets_file(
+                            str(self.credentials_file), self.scopes)
+                        self.logger.info("Starting local server for OAuth callback...")
+                        creds = flow.run_local_server(port=0)
+                        self.logger.info("OAuth flow completed successfully")
+                    except KeyboardInterrupt:
+                        # User interrupted (Ctrl+C)
+                        self.logger.warning("Authentication interrupted by user")
+                        self.authentication_failed.emit("Authentication cancelled by user")
+                        return
+                    except Exception as e:
+                        # Handle all OAuth errors (including cancellation/denial)
+                        error_msg = str(e)
+                        error_type = type(e).__name__
+                        self.logger.warning(f"OAuth flow error ({error_type}): {error_msg}")
+                        
+                        # Check for cancellation indicators in error message or type
+                        if ('access_denied' in error_msg.lower() or 
+                            'cancelled' in error_msg.lower() or
+                            'denied' in error_msg.lower() or
+                            'user' in error_type.lower()):
+                            self.authentication_failed.emit("Authentication cancelled by user")
+                        else:
+                            self.authentication_failed.emit(f"Authentication failed: {error_msg}")
+                        return
+                    
+                    # Save the credentials for the next run
+                    try:
+                        self.logger.info(f"Saving credentials to: {self.token_file}")
+                        with open(self.token_file, 'w') as token:
+                            token.write(creds.to_json())
+                        self.logger.info("Credentials saved successfully")
+                    except Exception as e:
+                        error_msg = f"Failed to save credentials: {str(e)}"
+                        self.logger.error(error_msg, exc_info=True)
+                        self.authentication_failed.emit(error_msg)
+                        return
+            
+            # Build and return service
+            self.logger.info("Building Google Drive service...")
+            service = build('drive', 'v3', credentials=creds)
+            self.logger.info("Google Drive service created successfully")
+            self.authentication_complete.emit(service)
+            
+        except Exception as e:
+            error_msg = f"Authentication error: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            self.authentication_failed.emit(error_msg)
+
+
 class RecordDataWidget(QGroupBox):
     """Widget for data recording controls"""
     
@@ -85,12 +197,20 @@ class RecordDataWidget(QGroupBox):
         self.gdrive_enabled = True
         self.gdrive_service = None
         self.gdrive_folder_id = None
+        self.gdrive_auth_worker = None
+        self.gdrive_auth_in_progress = False
         
         self.setup_ui()
         self.load_data_folder_preference()  # Load saved data folder path
         self.setup_connections()
         self.load_gdrive_settings()
         self.set_enabled(False)  # Initially disabled until device is connected
+        
+        # Log Google Drive availability status
+        if GOOGLE_DRIVE_AVAILABLE:
+            self.logger.info("Google Drive libraries are available")
+        else:
+            self.logger.warning(f"Google Drive libraries not available. Import error: {GOOGLE_DRIVE_IMPORT_ERROR}")
         
         self.logger.info("RecordDataWidget initialized")
         
@@ -565,27 +685,25 @@ class RecordDataWidget(QGroupBox):
             # Upload to Google Drive if enabled
             if self.gdrive_enabled:
                 try:
-                    self.logger.info("Uploading to Google Drive...")
+                    self.logger.info("Google Drive upload is enabled, starting upload process...")
                     # Determine what to upload
                     subject_id = self.get_subject_id()
                     if subject_id:
                         # Upload the entire subject folder
                         upload_path = save_folder
-                        upload_success = self.upload_to_gdrive(upload_path, subject_id)
+                        self.logger.info(f"Preparing to upload folder: {upload_path}")
+                        self.upload_to_gdrive_async(upload_path, subject_id)
                     else:
                         # Upload just the data file
                         upload_path = data_path
-                        upload_success = self.upload_to_gdrive(upload_path)
-                    
-                    if upload_success:
-                        self.logger.info("✅ Recording uploaded to Google Drive successfully")
-                    else:
-                        self.logger.warning("❌ Failed to upload recording to Google Drive")
-                        
+                        self.logger.info(f"Preparing to upload file: {upload_path}")
+                        self.upload_to_gdrive_async(upload_path)
                 except Exception as e:
                     self.logger.error(f"❌ Error during Google Drive upload: {e}", exc_info=True)
                     QMessageBox.warning(self, "Upload Warning", 
                                       f"Recording saved locally but failed to upload to Google Drive: {str(e)}")
+            else:
+                self.logger.info("Google Drive upload is disabled, skipping upload")
             
             return str(data_path)
             
@@ -646,21 +764,37 @@ class RecordDataWidget(QGroupBox):
         
     def toggle_gdrive(self):
         """Toggle Google Drive upload"""
-        if not GOOGLE_DRIVE_AVAILABLE:
-            QMessageBox.warning(self, "Google Drive Not Available", 
-                              "Google Drive libraries are not installed. Please install them to enable upload functionality.\n\n"
-                              "Install with: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client")
-            self.gdrive_btn.setChecked(False)
-            self.gdrive_enabled = False
-            return
-            
+        # Only check availability when trying to ENABLE, not when disabling
+        if self.gdrive_btn.isChecked():  # User is trying to enable
+            if not GOOGLE_DRIVE_AVAILABLE:
+                error_details = ""
+                if GOOGLE_DRIVE_IMPORT_ERROR:
+                    error_details = f"\n\nImport error: {GOOGLE_DRIVE_IMPORT_ERROR}"
+                QMessageBox.warning(self, "Google Drive Not Available", 
+                                  "Google Drive libraries are not installed or not accessible. Please install them to enable upload functionality.\n\n"
+                                  f"Install with: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client{error_details}\n\n"
+                                  "Note: Make sure you're installing in the correct Python environment.")
+                self.gdrive_btn.setChecked(False)
+                self.gdrive_enabled = False
+                return
+        
+        # Update enabled state based on button
         self.gdrive_enabled = self.gdrive_btn.isChecked()
+        self.logger.info(f"Google Drive upload {'enabled' if self.gdrive_enabled else 'disabled'}")
+        if GOOGLE_DRIVE_AVAILABLE:
+            self.logger.info("Google Drive libraries are available")
+        else:
+            self.logger.warning(f"Google Drive libraries not available. Import error: {GOOGLE_DRIVE_IMPORT_ERROR}")
             
     def load_gdrive_settings(self):
         """Load Google Drive settings from files"""
         if not GOOGLE_DRIVE_AVAILABLE:
             # Keep button enabled but show warning tooltip
             self.gdrive_btn.setToolTip("Google Drive libraries not installed - install to enable upload")
+            # Uncheck button if libraries aren't available
+            self.gdrive_btn.setChecked(False)
+            self.gdrive_enabled = False
+            self.logger.warning("Google Drive libraries not available, disabling upload")
             return
             
         # Check for credentials.json file (read from bundled resources)
@@ -672,7 +806,15 @@ class RecordDataWidget(QGroupBox):
             self.gdrive_btn.setChecked(False)
             self.gdrive_btn.setToolTip("Google Drive credentials not found - add credentials.json to enable upload")
             self.gdrive_enabled = False
+            self.logger.warning(f"Google Drive credentials not found at: {credentials_file}")
             return
+        
+        # Credentials found, ensure button state matches enabled state
+        # If button is checked, keep it checked; otherwise sync with gdrive_enabled
+        if not self.gdrive_btn.isChecked():
+            self.gdrive_enabled = False
+        else:
+            self.gdrive_enabled = True
             
         # Load folder ID (read from bundled resources)
         folder_id_file = resource_path / "google_drive" / "folder_id.txt"
@@ -681,64 +823,233 @@ class RecordDataWidget(QGroupBox):
             try:
                 with open(folder_id_file, 'r') as f:
                     self.gdrive_folder_id = f.read().strip()
+                self.logger.info(f"Loaded Google Drive folder ID: {self.gdrive_folder_id}")
             except Exception as e:
-                print(f"Error loading folder ID: {e}")
+                self.logger.warning(f"Error loading folder ID: {e}")
                 self.gdrive_folder_id = None
         else:
             self.gdrive_folder_id = None
+            self.logger.info("No Google Drive folder ID file found")
             
-    def authenticate_gdrive(self):
-        """Authenticates with Google Drive API using OAuth."""
+    def authenticate_gdrive(self, callback=None):
+        """Authenticates with Google Drive API using OAuth.
+        
+        Args:
+            callback: Optional callback function that receives (service, error) tuple.
+                     If None, returns service directly (blocking for existing tokens only).
+        
+        Returns:
+            Service object if callback is None and authentication succeeds immediately,
+            None if callback is provided (async) or if authentication fails.
+        """
         if not GOOGLE_DRIVE_AVAILABLE:
+            if callback:
+                callback(None, "Google Drive libraries not available")
             return None
         
+        # Paths for read-only resources (bundled with app)
+        resource_path = get_resource_path()
+        credentials_file = resource_path / "google_drive" / "credentials.json"
+        
+        # Path for writable token file (user config directory)
+        config_path = get_config_path()
+        token_file = config_path / "token.json"
+        
+        # Check if credentials file exists
+        if not credentials_file.exists():
+            error_msg = f"credentials.json not found at {credentials_file}.\n\nPlease add your Google Drive OAuth credentials."
+            if callback:
+                callback(None, error_msg)
+            else:
+                QMessageBox.critical(self, "Google Drive Error", error_msg)
+            return None
+        
+        # Try to load existing credentials first (fast path)
         try:
-            creds = None
-            
-            # Paths for read-only resources (bundled with app)
-            resource_path = get_resource_path()
-            credentials_file = resource_path / "google_drive" / "credentials.json"
-            
-            # Path for writable token file (user config directory)
-            config_path = get_config_path()
-            token_file = config_path / "token.json"
-            
-            # The file token.json stores the user's access and refresh tokens
             if token_file.exists():
                 creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
-            
-            # If there are no (valid) credentials available, let the user log in
-            if not creds or not creds.valid:
+                
+                # If credentials are valid, return immediately
+                if creds and creds.valid:
+                    service = build('drive', 'v3', credentials=creds)
+                    if callback:
+                        callback(service, None)
+                    return service
+                
+                # If expired but has refresh token, try to refresh
                 if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    # Make sure credentials.json exists
-                    if not credentials_file.exists():
-                        QMessageBox.critical(self, "Google Drive Error", 
-                                           f"credentials.json not found at {credentials_file}.\n\n"
-                                           "Please add your Google Drive OAuth credentials.")
-                        return None
-                    
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        str(credentials_file), SCOPES)
-                    creds = flow.run_local_server(port=0)
+                    try:
+                        creds.refresh(Request())
+                        service = build('drive', 'v3', credentials=creds)
+                        # Save refreshed token
+                        with open(token_file, 'w') as token:
+                            token.write(creds.to_json())
+                        if callback:
+                            callback(service, None)
+                        return service
+                    except Exception:
+                        # Refresh failed, need to re-authenticate
+                        pass
+        except Exception:
+            # Token file exists but is invalid, need to re-authenticate
+            pass
+        
+        # Need browser authentication - use worker thread to avoid blocking UI
+        if callback:
+            # Async mode: use worker thread
+            if self.gdrive_auth_in_progress:
+                self.logger.warning("Authentication already in progress, ignoring new request")
+                callback(None, "Authentication already in progress")
+                return None
+            
+            self.logger.info("Starting async authentication with worker thread...")
+            self.gdrive_auth_in_progress = True
+            
+            # Show message to user that browser will open
+            QMessageBox.information(self, "Google Drive Authentication", 
+                                  "A browser window will open for Google Drive authentication.\n\n"
+                                  "Please sign in and grant permissions. You can close this message.")
+            
+            # Create and start worker thread
+            self.gdrive_auth_worker = GDriveAuthWorker(
+                credentials_file, token_file, SCOPES, self
+            )
+            
+            def on_auth_complete(service):
+                self.logger.info("Authentication completed successfully")
+                self.gdrive_auth_in_progress = False
+                self.gdrive_service = service
+                callback(service, None)
+            
+            def on_auth_failed(error_msg):
+                self.logger.warning(f"Authentication failed: {error_msg}")
+                self.gdrive_auth_in_progress = False
+                self.gdrive_service = None
+                callback(None, error_msg)
+            
+            self.gdrive_auth_worker.authentication_complete.connect(on_auth_complete)
+            self.gdrive_auth_worker.authentication_failed.connect(on_auth_failed)
+            self.logger.info("Starting worker thread...")
+            self.gdrive_auth_worker.start()
+            self.logger.info("Worker thread started")
+            return None
+        else:
+            # Synchronous mode (for backward compatibility, but should be avoided)
+            # This will block the UI, but we handle cancellation better
+            try:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(credentials_file), SCOPES)
+                creds = flow.run_local_server(port=0)
                 
                 # Save the credentials for the next run
                 with open(token_file, 'w') as token:
                     token.write(creds.to_json())
                     
-                print(f"✅ Google Drive credentials saved to: {token_file}")
+                service = build('drive', 'v3', credentials=creds)
+                return service
+            except KeyboardInterrupt:
+                # User interrupted
+                QMessageBox.warning(self, "Authentication Cancelled", 
+                                  "Google Drive authentication was cancelled. "
+                                  "Local file has been saved successfully.")
+                return None
+            except Exception as error:
+                # Handle all OAuth errors (including cancellation/denial)
+                error_msg = str(error)
+                error_type = type(error).__name__
+                self.logger.warning(f"OAuth flow error ({error_type}): {error_msg}")
+                
+                # Check for cancellation indicators in error message or type
+                if ('access_denied' in error_msg.lower() or 
+                    'cancelled' in error_msg.lower() or
+                    'denied' in error_msg.lower() or
+                    'user' in error_type.lower()):
+                    QMessageBox.warning(self, "Authentication Cancelled", 
+                                      "Google Drive authentication was cancelled. "
+                                      "Local file has been saved successfully.")
+                else:
+                    QMessageBox.critical(self, "Google Drive Error", 
+                                       f"Authentication error: {error_msg}")
+                return None
             
-            service = build('drive', 'v3', credentials=creds)
-            return service
+    def upload_to_gdrive_async(self, file_path, subject_id=None):
+        """Upload file or folder to Google Drive asynchronously (non-blocking)"""
+        if not self.gdrive_enabled:
+            self.logger.info("Google Drive upload is disabled (button unchecked)")
+            return
+        
+        if not GOOGLE_DRIVE_AVAILABLE:
+            error_details = ""
+            if GOOGLE_DRIVE_IMPORT_ERROR:
+                error_details = f"\n\nImport error: {GOOGLE_DRIVE_IMPORT_ERROR}"
+            error_msg = f"Google Drive libraries are not available. Please install them to enable upload functionality.{error_details}"
+            self.logger.error(error_msg)
+            QMessageBox.warning(self, "Google Drive Not Available", 
+                              f"{error_msg}\n\n"
+                              "Install with: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client\n\n"
+                              "Note: Make sure you're installing in the correct Python environment.")
+            return
+        
+        file_path = Path(file_path)
+        self.logger.info(f"Starting async Google Drive upload for: {file_path}")
+        
+        def on_auth_complete(service, error):
+            """Callback when authentication completes"""
+            if error:
+                # Authentication failed or was cancelled
+                self.logger.warning(f"Google Drive authentication failed: {error}")
+                if "cancelled" in error.lower():
+                    QMessageBox.information(self, "Upload Cancelled", 
+                                          "Google Drive upload was cancelled. "
+                                          "Your recording has been saved locally.")
+                else:
+                    QMessageBox.warning(self, "Upload Warning", 
+                                      f"Recording saved locally but Google Drive upload failed: {error}")
+                return
             
-        except Exception as error:
-            QMessageBox.critical(self, "Google Drive Error", 
-                               f"Authentication error: {error}")
-            return None
+            if not service:
+                self.logger.warning("Google Drive service not available")
+                return
             
+            self.gdrive_service = service
+            self.logger.info("Authentication successful, proceeding with upload...")
+            
+            # Now perform the upload
+            try:
+                if file_path.is_file():
+                    # Upload single file
+                    self.logger.info(f"Uploading single file: {file_path}")
+                    upload_success = self._upload_file_to_gdrive(file_path)
+                elif file_path.is_dir():
+                    # Upload entire folder (subject folder)
+                    self.logger.info(f"Uploading folder: {file_path}")
+                    upload_success = self._upload_folder_to_gdrive(file_path, subject_id)
+                else:
+                    self.logger.warning(f"Invalid path for upload: {file_path}")
+                    upload_success = False
+                
+                if upload_success:
+                    self.logger.info("✅ Recording uploaded to Google Drive successfully")
+                else:
+                    self.logger.warning("❌ Failed to upload recording to Google Drive")
+                    
+            except Exception as e:
+                self.logger.error(f"❌ Error during Google Drive upload: {e}", exc_info=True)
+                QMessageBox.warning(self, "Upload Warning", 
+                                  f"Recording saved locally but failed to upload to Google Drive: {str(e)}")
+        
+        # Authenticate (async) and then upload
+        if self.gdrive_service:
+            # Already authenticated, upload directly
+            self.logger.info("Already authenticated, uploading directly...")
+            on_auth_complete(self.gdrive_service, None)
+        else:
+            # Need to authenticate first
+            self.logger.info("Not authenticated, starting authentication...")
+            self.authenticate_gdrive(callback=on_auth_complete)
+    
     def upload_to_gdrive(self, file_path, subject_id=None):
-        """Upload file or folder to Google Drive"""
+        """Upload file or folder to Google Drive (synchronous, for backward compatibility)"""
         if not self.gdrive_enabled or not GOOGLE_DRIVE_AVAILABLE:
             return False
             
