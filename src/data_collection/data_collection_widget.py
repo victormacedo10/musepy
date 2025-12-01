@@ -431,27 +431,41 @@ class DataCollectionWidget(QWidget):
                 if data.size == 0:
                     return  # No new data available
 
+                self.logger.debug(f"EEG: Received {data.size} values, shape: {data.shape}")
                 df_eeg = self.make_dataframe(data, BrainFlowPresets.DEFAULT_PRESET)
                 if df_eeg.empty:
+                    self.logger.debug("EEG: DataFrame is empty after creation")
                     return
+                
+                self.logger.debug(f"EEG: DataFrame created with {len(df_eeg)} rows, {len(df_eeg._columns)} columns")
                 
                 # Get IMU data
                 df_imu = None
                 try:
                     imu_data = self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
                     if imu_data.size > 0:
+                        self.logger.debug(f"IMU: Received {imu_data.size} values, shape: {imu_data.shape}")
                         df_imu = self.make_dataframe(imu_data, BrainFlowPresets.AUXILIARY_PRESET)
+                        if not df_imu.empty:
+                            self.logger.debug(f"IMU: DataFrame created with {len(df_imu)} rows, {len(df_imu._columns)} columns")
+                    else:
+                        self.logger.debug("IMU: No data available")
                 except Exception as e:
-                    self.logger.debug(f"No IMU data available: {e}")
+                    self.logger.debug(f"IMU: Error getting data: {e}")
                 
                 # Get PPG data
                 df_ppg = None
                 try:
                     ppg_data = self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
                     if ppg_data.size > 0:
+                        self.logger.debug(f"PPG: Received {ppg_data.size} values, shape: {ppg_data.shape}")
                         df_ppg = self.make_dataframe(ppg_data, BrainFlowPresets.ANCILLARY_PRESET)
+                        if not df_ppg.empty:
+                            self.logger.debug(f"PPG: DataFrame created with {len(df_ppg)} rows, {len(df_ppg._columns)} columns")
+                    else:
+                        self.logger.debug("PPG: No data available")
                 except Exception as e:
-                    self.logger.debug(f"No PPG data available: {e}")
+                    self.logger.debug(f"PPG: Error getting data: {e}")
                 
                 # Set timestamp_start from the earliest timestamp across all data types
                 # This ensures no negative time_rel values
@@ -480,7 +494,9 @@ class DataCollectionWidget(QWidget):
                     
                     if earliest_timestamp is not None:
                         self.timestamp_start = earliest_timestamp
-                        self.logger.debug(f"Timestamp start set to: {self.timestamp_start}")
+                        self.logger.info(f"Timestamp start set to: {self.timestamp_start} (from earliest timestamp across all data types)")
+                    else:
+                        self.logger.warning("Could not determine timestamp_start - no valid timestamps found")
                 
                 # Calculate time_rel for all data types using the same timestamp_start
                 if self.timestamp_start is not None:
@@ -517,9 +533,11 @@ class DataCollectionWidget(QWidget):
     def write_data_to_csv(self, data_type, df):
         """Write data incrementally to CSV file"""
         if df is None or df.empty:
+            self.logger.debug(f"{data_type}: DataFrame is None or empty, skipping CSV write")
             return
         
         if data_type not in self.csv_writers:
+            self.logger.warning(f"{data_type}: CSV writer not found, skipping write")
             return
         
         writer = self.csv_writers[data_type]
@@ -536,17 +554,19 @@ class DataCollectionWidget(QWidget):
         if not self.csv_headers_written[data_type]:
             writer.writerow(ordered_columns)
             self.csv_headers_written[data_type] = True
+            self.logger.debug(f"{data_type}: Wrote CSV header with {len(ordered_columns)} columns: {ordered_columns}")
         
         # Write data rows - ensure column order exactly matches header
         num_rows = len(df)
         if num_rows == 0:
+            self.logger.debug(f"{data_type}: No rows to write")
             return
         
         # Validate DataFrame structure - ensure all columns have the same length
         column_lengths = {}
         for col in ordered_columns:
             if col not in df._data:
-                self.logger.error(f"Column '{col}' not found in {data_type} DataFrame. Available columns: {df._columns}")
+                self.logger.error(f"{data_type}: Column '{col}' not found. Available columns: {df._columns}")
                 continue
             
             col_data = df._data[col]
@@ -559,17 +579,39 @@ class DataCollectionWidget(QWidget):
             
             # Check if column length matches expected number of rows
             if col_len != num_rows:
-                self.logger.warning(f"Column '{col}' has length {col_len} but DataFrame reports {num_rows} rows in {data_type} data")
+                self.logger.warning(f"{data_type}: Column '{col}' has length {col_len} but DataFrame reports {num_rows} rows")
         
         # Use the actual number of rows from the first valid column
         if not column_lengths:
-            self.logger.error(f"No valid columns found for {data_type} data")
+            self.logger.error(f"{data_type}: No valid columns found")
             return
         
         # Get the minimum length to avoid index errors
         actual_num_rows = min(column_lengths.values()) if column_lengths else num_rows
         
+        # Validate that all columns have the same length (critical check)
+        if len(set(column_lengths.values())) > 1:
+            self.logger.error(f"{data_type}: Column length mismatch! Lengths: {column_lengths}")
+            # Don't write if columns have different lengths - this indicates a serious problem
+            return
+        
+        # Validate first row structure before writing
+        if actual_num_rows > 0:
+            first_row_values = []
+            for col in ordered_columns:
+                if col in df._data:
+                    first_row_values.append(df._data[col][0])
+                else:
+                    first_row_values.append(None)
+            
+            # Check if first row looks correct (not all same value, reasonable data types)
+            if len(set(first_row_values[:3])) == 1 and first_row_values[0] is not None:
+                self.logger.warning(f"{data_type}: First row has identical values in first 3 columns: {first_row_values[:3]} - possible transpose issue")
+            
+            self.logger.debug(f"{data_type}: Writing {actual_num_rows} rows. First row sample (first 3 cols): {first_row_values[:3]}")
+        
         # Write rows one by one, ensuring we don't go out of bounds
+        rows_written = 0
         for i in range(actual_num_rows):
             row_data = []
             for col in ordered_columns:
@@ -592,6 +634,7 @@ class DataCollectionWidget(QWidget):
             
             # Write the complete row
             writer.writerow(row_data)
+            rows_written += 1
         
         # Flush to ensure data is written to disk
         self.csv_files[data_type].flush()
@@ -599,6 +642,9 @@ class DataCollectionWidget(QWidget):
             os.fsync(self.csv_files[data_type].fileno())
         except (OSError, io.UnsupportedOperation):
             pass
+        
+        if rows_written > 0:
+            self.logger.debug(f"{data_type}: Wrote {rows_written} rows to CSV")
     
     def make_dataframe(self, data, preset):
         """Create DataFrame from raw board data"""
@@ -615,10 +661,15 @@ class DataCollectionWidget(QWidget):
         # BrainFlow returns data in shape (num_channels, num_samples)
         # We need to transpose to get (num_samples, num_channels) for DataFrame
         if data.size == 0:
+            self.logger.debug(f"{preset}: Empty data received")
             return pd.DataFrame(columns=header)
+        
+        # Log initial data shape
+        self.logger.debug(f"{preset}: Raw data shape: {data.shape}, size: {data.size}, expected columns: {num_columns}")
         
         # Ensure data is 2D
         if data.ndim == 1:
+            self.logger.warning(f"{preset}: Data is 1D, reshaping to 2D")
             data = data.reshape(1, -1)
         
         # BrainFlow always returns data as (channels, samples)
@@ -627,28 +678,36 @@ class DataCollectionWidget(QWidget):
         if data.shape[0] == num_columns:
             # Correct format: (channels, samples) -> transpose to (samples, channels)
             transposed_data = data.T
+            self.logger.debug(f"{preset}: Transposed from (channels={data.shape[0]}, samples={data.shape[1]}) to (samples={transposed_data.shape[0]}, channels={transposed_data.shape[1]})")
         elif data.shape[1] == num_columns:
             # Already in (samples, channels) format - use as is
             transposed_data = data
+            self.logger.debug(f"{preset}: Data already in (samples={data.shape[0]}, channels={data.shape[1]}) format")
         else:
             # Unexpected shape - log warning and try to fix
-            self.logger.warning(f"Unexpected data shape {data.shape} for preset {preset}, expected ({num_columns}, N) or (N, {num_columns})")
+            self.logger.warning(f"{preset}: Unexpected data shape {data.shape}, expected ({num_columns}, N) or (N, {num_columns})")
             # Try to fix by assuming it's (channels, samples) if first dimension matches
             if data.shape[0] == num_columns:
                 transposed_data = data.T
+                self.logger.debug(f"{preset}: Fixed by transposing")
             else:
                 # Last resort: try to reshape
-                self.logger.error(f"Cannot fix data shape {data.shape} for {num_columns} columns")
+                self.logger.error(f"{preset}: Cannot fix data shape {data.shape} for {num_columns} columns")
                 return pd.DataFrame(columns=header)
         
         # Verify the final shape is correct: (num_samples, num_columns)
         if transposed_data.shape[1] != num_columns:
-            self.logger.error(f"After processing, data shape {transposed_data.shape} doesn't match {num_columns} columns for preset {preset}")
+            self.logger.error(f"{preset}: After processing, data shape {transposed_data.shape} doesn't match {num_columns} columns")
             return pd.DataFrame(columns=header)
         
-        # Create DataFrame - FastDataFrame expects (samples, channels) format
-        # which is what we have now
-        df = pd.DataFrame(transposed_data, columns=header)
+        # Create DataFrame using dictionary format to avoid FastDataFrame auto-transpose
+        # FastDataFrame will transpose if shape[0] == len(columns), so we use dict format instead
+        num_samples = transposed_data.shape[0]
+        data_dict = {}
+        for i, col_name in enumerate(header):
+            data_dict[col_name] = transposed_data[:, i]
+        
+        df = pd.DataFrame(data_dict)
         
         # Verify the DataFrame structure is correct
         if len(df) > 0:
@@ -657,7 +716,12 @@ class DataCollectionWidget(QWidget):
             for col in df._columns:
                 col_len = len(df._data[col])
                 if col_len != first_col_len:
-                    self.logger.warning(f"Column '{col}' has length {col_len} but expected {first_col_len} in {preset} DataFrame")
+                    self.logger.warning(f"{preset}: Column '{col}' has length {col_len} but expected {first_col_len}")
+            
+            # Log sample values from first row to verify structure
+            if first_col_len > 0:
+                first_row_sample = {col: df._data[col][0] for col in df._columns[:3]}  # First 3 columns
+                self.logger.debug(f"{preset}: First row sample (first 3 cols): {first_row_sample}, total rows: {first_col_len}")
         
         return df
         
