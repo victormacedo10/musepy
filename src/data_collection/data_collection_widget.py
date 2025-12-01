@@ -542,14 +542,11 @@ class DataCollectionWidget(QWidget):
         if num_rows == 0:
             return
         
-        # Get data arrays for each column in the exact order of ordered_columns
-        # Ensure all columns exist and have the same length
-        data_arrays = []
+        # Validate DataFrame structure - ensure all columns have the same length
+        column_lengths = {}
         for col in ordered_columns:
             if col not in df._data:
                 self.logger.error(f"Column '{col}' not found in {data_type} DataFrame. Available columns: {df._columns}")
-                # Use NaN array as placeholder to maintain column alignment
-                data_arrays.append(np.full(num_rows, np.nan))
                 continue
             
             col_data = df._data[col]
@@ -557,22 +554,43 @@ class DataCollectionWidget(QWidget):
             if not isinstance(col_data, np.ndarray):
                 col_data = np.array(col_data)
             
-            # Ensure length matches number of rows
-            if len(col_data) != num_rows:
-                self.logger.warning(f"Column '{col}' has length {len(col_data)} but expected {num_rows} in {data_type} data")
-                if len(col_data) > num_rows:
-                    col_data = col_data[:num_rows]
-                else:
-                    # Pad with NaN if shorter
-                    padded = np.full(num_rows, np.nan)
-                    padded[:len(col_data)] = col_data
-                    col_data = padded
+            col_len = len(col_data)
+            column_lengths[col] = col_len
             
-            data_arrays.append(col_data)
+            # Check if column length matches expected number of rows
+            if col_len != num_rows:
+                self.logger.warning(f"Column '{col}' has length {col_len} but DataFrame reports {num_rows} rows in {data_type} data")
         
-        # Write rows - each row has values in the exact order of ordered_columns
-        for i in range(num_rows):
-            row_data = [arr[i] for arr in data_arrays]
+        # Use the actual number of rows from the first valid column
+        if not column_lengths:
+            self.logger.error(f"No valid columns found for {data_type} data")
+            return
+        
+        # Get the minimum length to avoid index errors
+        actual_num_rows = min(column_lengths.values()) if column_lengths else num_rows
+        
+        # Write rows one by one, ensuring we don't go out of bounds
+        for i in range(actual_num_rows):
+            row_data = []
+            for col in ordered_columns:
+                if col not in df._data:
+                    # Missing column - use NaN
+                    row_data.append(np.nan)
+                    continue
+                
+                col_data = df._data[col]
+                # Ensure it's a numpy array
+                if not isinstance(col_data, np.ndarray):
+                    col_data = np.array(col_data)
+                
+                # Get the i-th element from this column
+                if i < len(col_data):
+                    row_data.append(col_data[i])
+                else:
+                    # Out of bounds - use NaN
+                    row_data.append(np.nan)
+            
+            # Write the complete row
             writer.writerow(row_data)
         
         # Flush to ensure data is written to disk
@@ -592,7 +610,56 @@ class DataCollectionWidget(QWidget):
             chan_names = ['PPG_1', 'PPG_2', 'Unknown']
             
         header = ['package_num'] + chan_names + ['timestamp', 'marker']
-        return pd.DataFrame(data.T, columns=header)
+        num_columns = len(header)
+        
+        # BrainFlow returns data in shape (num_channels, num_samples)
+        # We need to transpose to get (num_samples, num_channels) for DataFrame
+        if data.size == 0:
+            return pd.DataFrame(columns=header)
+        
+        # Ensure data is 2D
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+        
+        # BrainFlow always returns data as (channels, samples)
+        # So data.shape[0] should equal num_columns (number of channels)
+        # We need to transpose to get (samples, channels)
+        if data.shape[0] == num_columns:
+            # Correct format: (channels, samples) -> transpose to (samples, channels)
+            transposed_data = data.T
+        elif data.shape[1] == num_columns:
+            # Already in (samples, channels) format - use as is
+            transposed_data = data
+        else:
+            # Unexpected shape - log warning and try to fix
+            self.logger.warning(f"Unexpected data shape {data.shape} for preset {preset}, expected ({num_columns}, N) or (N, {num_columns})")
+            # Try to fix by assuming it's (channels, samples) if first dimension matches
+            if data.shape[0] == num_columns:
+                transposed_data = data.T
+            else:
+                # Last resort: try to reshape
+                self.logger.error(f"Cannot fix data shape {data.shape} for {num_columns} columns")
+                return pd.DataFrame(columns=header)
+        
+        # Verify the final shape is correct: (num_samples, num_columns)
+        if transposed_data.shape[1] != num_columns:
+            self.logger.error(f"After processing, data shape {transposed_data.shape} doesn't match {num_columns} columns for preset {preset}")
+            return pd.DataFrame(columns=header)
+        
+        # Create DataFrame - FastDataFrame expects (samples, channels) format
+        # which is what we have now
+        df = pd.DataFrame(transposed_data, columns=header)
+        
+        # Verify the DataFrame structure is correct
+        if len(df) > 0:
+            # Check that each column has the same length (number of rows)
+            first_col_len = len(df._data[df._columns[0]]) if df._columns else 0
+            for col in df._columns:
+                col_len = len(df._data[col])
+                if col_len != first_col_len:
+                    self.logger.warning(f"Column '{col}' has length {col_len} but expected {first_col_len} in {preset} DataFrame")
+        
+        return df
         
     def get_board_data(self, preset):
         """Get data from board for a specific preset"""
