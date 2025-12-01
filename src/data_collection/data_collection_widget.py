@@ -385,8 +385,8 @@ class DataCollectionWidget(QWidget):
             self.stream_timer = QTimer()
             self.stream_timer.timeout.connect(self.update_stream)
             # Use 50ms interval (20 Hz) for more stable sampling rate and to catch all data
-            self.stream_timer.start(50)
-            self.logger.debug("Stream timer started (50ms interval)")
+            self.stream_timer.start(200)
+            self.logger.debug("Stream timer started (200ms interval)")
             
     def stop_streaming(self):
         """Stop real-time data streaming"""
@@ -435,18 +435,12 @@ class DataCollectionWidget(QWidget):
                 if df_eeg.empty:
                     return
                 
-                if self.timestamp_start is None:
-                    self.timestamp_start = df_eeg['timestamp'].iloc[0]
-                df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamp_start
-                
                 # Get IMU data
                 df_imu = None
                 try:
                     imu_data = self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
                     if imu_data.size > 0:
                         df_imu = self.make_dataframe(imu_data, BrainFlowPresets.AUXILIARY_PRESET)
-                        if not df_imu.empty:
-                            df_imu['time_rel'] = df_imu['timestamp'] - self.timestamp_start
                 except Exception as e:
                     self.logger.debug(f"No IMU data available: {e}")
                 
@@ -456,10 +450,48 @@ class DataCollectionWidget(QWidget):
                     ppg_data = self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
                     if ppg_data.size > 0:
                         df_ppg = self.make_dataframe(ppg_data, BrainFlowPresets.ANCILLARY_PRESET)
-                        if not df_ppg.empty:
-                            df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamp_start
                 except Exception as e:
                     self.logger.debug(f"No PPG data available: {e}")
+                
+                # Set timestamp_start from the earliest timestamp across all data types
+                # This ensures no negative time_rel values
+                if self.timestamp_start is None:
+                    earliest_timestamp = None
+                    
+                    # Check EEG timestamps
+                    if not df_eeg.empty and 'timestamp' in df_eeg._columns:
+                        eeg_timestamps = df_eeg._data['timestamp']
+                        if len(eeg_timestamps) > 0:
+                            earliest_timestamp = eeg_timestamps[0]
+                    
+                    # Check IMU timestamps
+                    if df_imu is not None and not df_imu.empty and 'timestamp' in df_imu._columns:
+                        imu_timestamps = df_imu._data['timestamp']
+                        if len(imu_timestamps) > 0:
+                            if earliest_timestamp is None or imu_timestamps[0] < earliest_timestamp:
+                                earliest_timestamp = imu_timestamps[0]
+                    
+                    # Check PPG timestamps
+                    if df_ppg is not None and not df_ppg.empty and 'timestamp' in df_ppg._columns:
+                        ppg_timestamps = df_ppg._data['timestamp']
+                        if len(ppg_timestamps) > 0:
+                            if earliest_timestamp is None or ppg_timestamps[0] < earliest_timestamp:
+                                earliest_timestamp = ppg_timestamps[0]
+                    
+                    if earliest_timestamp is not None:
+                        self.timestamp_start = earliest_timestamp
+                        self.logger.debug(f"Timestamp start set to: {self.timestamp_start}")
+                
+                # Calculate time_rel for all data types using the same timestamp_start
+                if self.timestamp_start is not None:
+                    if not df_eeg.empty and 'timestamp' in df_eeg._columns:
+                        df_eeg['time_rel'] = df_eeg._data['timestamp'] - self.timestamp_start
+                    
+                    if df_imu is not None and not df_imu.empty and 'timestamp' in df_imu._columns:
+                        df_imu['time_rel'] = df_imu._data['timestamp'] - self.timestamp_start
+                    
+                    if df_ppg is not None and not df_ppg.empty and 'timestamp' in df_ppg._columns:
+                        df_ppg['time_rel'] = df_ppg._data['timestamp'] - self.timestamp_start
             
             # Write data to CSV files incrementally if recording
             if self.is_recording:
@@ -493,6 +525,7 @@ class DataCollectionWidget(QWidget):
         writer = self.csv_writers[data_type]
         
         # Reorder columns: original columns first, then time_rel at the end
+        # Preserve the original column order from make_dataframe
         original_columns = [col for col in df._columns if col != 'time_rel']
         if 'time_rel' in df._columns:
             ordered_columns = original_columns + ['time_rel']
@@ -504,9 +537,43 @@ class DataCollectionWidget(QWidget):
             writer.writerow(ordered_columns)
             self.csv_headers_written[data_type] = True
         
-        # Write data rows
-        for row in zip(*[df._data[col] for col in ordered_columns]):
-            writer.writerow(row)
+        # Write data rows - ensure column order exactly matches header
+        num_rows = len(df)
+        if num_rows == 0:
+            return
+        
+        # Get data arrays for each column in the exact order of ordered_columns
+        # Ensure all columns exist and have the same length
+        data_arrays = []
+        for col in ordered_columns:
+            if col not in df._data:
+                self.logger.error(f"Column '{col}' not found in {data_type} DataFrame. Available columns: {df._columns}")
+                # Use NaN array as placeholder to maintain column alignment
+                data_arrays.append(np.full(num_rows, np.nan))
+                continue
+            
+            col_data = df._data[col]
+            # Ensure it's a numpy array
+            if not isinstance(col_data, np.ndarray):
+                col_data = np.array(col_data)
+            
+            # Ensure length matches number of rows
+            if len(col_data) != num_rows:
+                self.logger.warning(f"Column '{col}' has length {len(col_data)} but expected {num_rows} in {data_type} data")
+                if len(col_data) > num_rows:
+                    col_data = col_data[:num_rows]
+                else:
+                    # Pad with NaN if shorter
+                    padded = np.full(num_rows, np.nan)
+                    padded[:len(col_data)] = col_data
+                    col_data = padded
+            
+            data_arrays.append(col_data)
+        
+        # Write rows - each row has values in the exact order of ordered_columns
+        for i in range(num_rows):
+            row_data = [arr[i] for arr in data_arrays]
+            writer.writerow(row_data)
         
         # Flush to ensure data is written to disk
         self.csv_files[data_type].flush()
