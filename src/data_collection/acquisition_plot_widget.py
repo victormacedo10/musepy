@@ -167,14 +167,13 @@ class AcquisitionPlotWidget(QWidget):
         self.stream_data = data
         self.is_showing_recording = False
         
-        # Get time_rel data (should always be present during streaming) and normalize to start at 0
-        time_rel_values = np.array(data._data['time_rel'], dtype=float)
-        if time_rel_values.size == 0:
+        # Get time_rel data (already normalized to start at 0 seconds)
+        if 'time_rel' not in data.columns:
             return
-
-        # Normalize so the first sample starts at 0 seconds (guards against absolute timestamps)
-        time_offset = time_rel_values[0]
-        time_data = time_rel_values - time_offset
+            
+        time_data = np.array(data._data['time_rel'], dtype=float)
+        if time_data.size == 0:
+            return
         
         # Update each channel
         for channel in self.channel_names:

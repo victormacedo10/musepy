@@ -40,10 +40,7 @@ class DataCollectionWidget(QWidget):
         self.is_recording = False
         self.recorded_data = {}
         self.stream_data = pd.DataFrame()
-        self.timestamps_start = None
-        self.timestamps_start_eeg = None
-        self.timestamps_start_imu = None
-        self.timestamps_start_ppg = None
+        self.timestamp_start = None  # Single timestamp reference in seconds
         self.stream_timer = None
         
         # CSV file handles for incremental writing
@@ -236,10 +233,7 @@ class DataCollectionWidget(QWidget):
         # Clear previous data
         self.recorded_data = {}
         self.stream_data = pd.DataFrame()
-        self.timestamps_start = None
-        self.timestamps_start_eeg = None
-        self.timestamps_start_imu = None
-        self.timestamps_start_ppg = None
+        self.timestamp_start = None
         self.acquisition_plot.clear_curves()
         self.logger.debug("Previous data cleared")
         
@@ -400,7 +394,7 @@ class DataCollectionWidget(QWidget):
             self.stream_timer.stop()
             self.stream_timer = None
             self.logger.debug("Stream timer stopped")
-            
+    
     def update_stream(self):
         """Update streaming data"""
         if not self.is_connected:
@@ -410,11 +404,11 @@ class DataCollectionWidget(QWidget):
             if self.demo_mode:
                 # Generate demo data
                 now = time.time()
-                if self.timestamps_start is None:
-                    self.timestamps_start = now
-                    self.logger.debug(f"Stream started at timestamp: {self.timestamps_start}")
+                if self.timestamp_start is None:
+                    self.timestamp_start = now
+                    self.logger.debug(f"Demo stream started at timestamp: {self.timestamp_start}")
                     
-                t_rel = now - self.timestamps_start
+                t_rel = now - self.timestamp_start
                 data_dict = {
                     'TP9': np.random.randn() * 50 + 100,
                     'AF7': np.random.randn() * 50 + 150,
@@ -423,119 +417,49 @@ class DataCollectionWidget(QWidget):
                     'time_rel': t_rel
                 }
                 df_eeg = pd.DataFrame([data_dict])
-                
-                # For demo mode, also generate dummy IMU and PPG data
                 df_imu = None
                 df_ppg = None
                 
             else:
-                # Get real data from board - EEG
+                # Get real data from board
                 if not self.board:
                     self.logger.warning("Board not available during streaming")
                     return
-                    
+                
+                # Get EEG data
                 data = self.board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
                 if data.size == 0:
                     return  # No new data available
-                    
+
                 df_eeg = self.make_dataframe(data, BrainFlowPresets.DEFAULT_PRESET)
                 if df_eeg.empty:
                     return
-                    
-                # Set timestamp reference for EEG
-                if self.timestamps_start_eeg is None:
-                    timestamp_data = df_eeg._data['timestamp']
-                    if len(timestamp_data) > 0:
-                        self.timestamps_start_eeg = float(timestamp_data[0])
-                        self.logger.info(f"First EEG data received at timestamp: {self.timestamps_start_eeg}")
-                        # Update global reference to earliest timestamp
-                        if self.timestamps_start is None or self.timestamps_start_eeg < self.timestamps_start:
-                            self.timestamps_start = self.timestamps_start_eeg
                 
-                # Calculate time_rel using the global reference
-                # Ensure timestamps_start is set before calculation
                 if self.timestamps_start is None:
-                    # Fallback: use first timestamp in current data as reference
-                    timestamp_data = df_eeg._data['timestamp']
-                    if len(timestamp_data) > 0:
-                        self.timestamps_start = float(timestamp_data[0])
-                        self.logger.warning(f"timestamps_start was None, using first EEG timestamp as reference: {self.timestamps_start}")
-                    else:
-                        # No data available, set time_rel to zeros
-                        df_eeg['time_rel'] = np.zeros(len(df_eeg))
-                        return
-                
+                    self.timestamps_start = df_eeg['timestamp'].iloc[0]
                 df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamps_start
                 
                 # Get IMU data
+                df_imu = None
                 try:
                     imu_data = self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
                     if imu_data.size > 0:
                         df_imu = self.make_dataframe(imu_data, BrainFlowPresets.AUXILIARY_PRESET)
                         if not df_imu.empty:
-                            # Set timestamp reference for IMU
-                            if self.timestamps_start_imu is None:
-                                timestamp_data = df_imu._data['timestamp']
-                                if len(timestamp_data) > 0:
-                                    self.timestamps_start_imu = float(timestamp_data[0])
-                                    # Update global reference to earliest timestamp
-                                    if self.timestamps_start is None or self.timestamps_start_imu < self.timestamps_start:
-                                        self.timestamps_start = self.timestamps_start_imu
-                            
-                            # Calculate time_rel using the global reference
-                            # Ensure timestamps_start is set before calculation
-                            if self.timestamps_start is None:
-                                # Fallback: use first timestamp in current data as reference
-                                timestamp_data = df_imu._data['timestamp']
-                                if len(timestamp_data) > 0:
-                                    self.timestamps_start = float(timestamp_data[0])
-                                    self.logger.warning(f"timestamps_start was None, using first IMU timestamp as reference: {self.timestamps_start}")
-                                else:
-                                    # No data available, skip this batch
-                                    df_imu = None
-                            
-                            if df_imu is not None:
-                                df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
-                    else:
-                        df_imu = None
+                            df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
                 except Exception as e:
                     self.logger.debug(f"No IMU data available: {e}")
-                    df_imu = None
                 
                 # Get PPG data
+                df_ppg = None
                 try:
                     ppg_data = self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
                     if ppg_data.size > 0:
                         df_ppg = self.make_dataframe(ppg_data, BrainFlowPresets.ANCILLARY_PRESET)
                         if not df_ppg.empty:
-                            # Set timestamp reference for PPG
-                            if self.timestamps_start_ppg is None:
-                                timestamp_data = df_ppg._data['timestamp']
-                                if len(timestamp_data) > 0:
-                                    self.timestamps_start_ppg = float(timestamp_data[0])
-                                    # Update global reference to earliest timestamp
-                                    if self.timestamps_start is None or self.timestamps_start_ppg < self.timestamps_start:
-                                        self.timestamps_start = self.timestamps_start_ppg
-                            
-                            # Calculate time_rel using the global reference
-                            # Ensure timestamps_start is set before calculation
-                            if self.timestamps_start is None:
-                                # Fallback: use first timestamp in current data as reference
-                                timestamp_data = df_ppg._data['timestamp']
-                                if len(timestamp_data) > 0:
-                                    self.timestamps_start = float(timestamp_data[0])
-                                    self.logger.warning(f"timestamps_start was None, using first PPG timestamp as reference: {self.timestamps_start}")
-                                else:
-                                    # No data available, skip this batch
-                                    df_ppg = None
-                            
-                            if df_ppg is not None:
-                                df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
-                    else:
-                        df_ppg = None
+                            df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
                 except Exception as e:
                     self.logger.debug(f"No PPG data available: {e}")
-                    df_ppg = None
             
             # Write data to CSV files incrementally if recording
             if self.is_recording:

@@ -7,8 +7,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QThread
 from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
-
-# NEW: for BLE scan
 import asyncio
 
 # ---------- Workers ----------
