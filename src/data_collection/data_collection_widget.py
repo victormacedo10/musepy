@@ -435,9 +435,9 @@ class DataCollectionWidget(QWidget):
                 if df_eeg.empty:
                     return
                 
-                if self.timestamps_start is None:
-                    self.timestamps_start = df_eeg['timestamp'].iloc[0]
-                df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamps_start
+                if self.timestamp_start is None:
+                    self.timestamp_start = df_eeg['timestamp'].iloc[0]
+                df_eeg['time_rel'] = df_eeg['timestamp'] - self.timestamp_start
                 
                 # Get IMU data
                 df_imu = None
@@ -446,7 +446,7 @@ class DataCollectionWidget(QWidget):
                     if imu_data.size > 0:
                         df_imu = self.make_dataframe(imu_data, BrainFlowPresets.AUXILIARY_PRESET)
                         if not df_imu.empty:
-                            df_imu['time_rel'] = df_imu['timestamp'] - self.timestamps_start
+                            df_imu['time_rel'] = df_imu['timestamp'] - self.timestamp_start
                 except Exception as e:
                     self.logger.debug(f"No IMU data available: {e}")
                 
@@ -457,7 +457,7 @@ class DataCollectionWidget(QWidget):
                     if ppg_data.size > 0:
                         df_ppg = self.make_dataframe(ppg_data, BrainFlowPresets.ANCILLARY_PRESET)
                         if not df_ppg.empty:
-                            df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamps_start
+                            df_ppg['time_rel'] = df_ppg['timestamp'] - self.timestamp_start
                 except Exception as e:
                     self.logger.debug(f"No PPG data available: {e}")
             
