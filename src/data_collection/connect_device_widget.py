@@ -180,6 +180,13 @@ class ConnectDeviceWidget(QGroupBox):
         device_layout.addWidget(self.connect_btn)
 
         layout.addLayout(device_layout)
+        
+        # --- Row 2: Reconnect button (only visible when connected) ---
+        self.reconnect_btn = QPushButton("Reconnect Stream")
+        self.reconnect_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.reconnect_btn.setEnabled(False)  # Only enabled when connected
+        self.reconnect_btn.setVisible(False)  # Hidden by default
+        layout.addWidget(self.reconnect_btn)
 
         # Styling (reuse your existing QSS)
         self.setStyleSheet("""
@@ -233,6 +240,7 @@ class ConnectDeviceWidget(QGroupBox):
     def setup_connections(self):
         self.connect_btn.toggled.connect(self.toggle_connection)
         self.scan_btn.clicked.connect(self.scan_for_devices)
+        self.reconnect_btn.clicked.connect(self.trigger_reconnect)
 
     # ---------- Scan flow ----------
 
@@ -375,13 +383,23 @@ class ConnectDeviceWidget(QGroupBox):
             self.device_combo.setEnabled(True)
             self.device_id_combo.setEnabled(True)
             self.scan_btn.setEnabled(True)
+            # Hide reconnect button
+            self.reconnect_btn.setVisible(False)
+            self.reconnect_btn.setEnabled(False)
             self.device_disconnected.emit()
             return
 
         if self.board:
             try:
-                self.board.stop_stream()
-                self.board.release_session()
+                try:
+                    self.board.stop_stream()
+                except Exception as e:
+                    print(f"Error stopping stream during disconnect: {e}")
+                
+                try:
+                    self.board.release_session()
+                except Exception as e:
+                    print(f"Error releasing session during disconnect: {e}")
             except Exception as e:
                 print(f"Error disconnecting board: {e}")
             finally:
@@ -392,12 +410,18 @@ class ConnectDeviceWidget(QGroupBox):
         self.device_combo.setEnabled(True)
         self.device_id_combo.setEnabled(True)
         self.scan_btn.setEnabled(True)
+        # Hide reconnect button
+        self.reconnect_btn.setVisible(False)
+        self.reconnect_btn.setEnabled(False)
         self.device_disconnected.emit()
 
     def on_connection_success(self, board):
         self.board = board
         self.connect_btn.setText("Disconnect")
         self.connect_btn.setEnabled(True)
+        # Show and enable reconnect button
+        self.reconnect_btn.setVisible(True)
+        self.reconnect_btn.setEnabled(True)
         self.device_connected.emit(board)
 
     def on_connection_failure(self, exception):
@@ -414,6 +438,17 @@ class ConnectDeviceWidget(QGroupBox):
 
     def on_connection_progress(self, message):
         print(f"Connection: {message}")
+    
+    def trigger_reconnect(self):
+        """Trigger manual stream reconnection"""
+        if self.parent and hasattr(self.parent, 'manual_reconnect'):
+            self.parent.manual_reconnect()
+        else:
+            QMessageBox.warning(
+                self,
+                "Reconnect Unavailable",
+                "Reconnect functionality is not available."
+            )
 
     # Helpers (unchanged)
     def get_selected_device(self):

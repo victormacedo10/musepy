@@ -10,20 +10,396 @@ import io
 import os
 from pathlib import Path
 from datetime import datetime
+from threading import Lock, Event
+from collections import deque
+from enum import Enum
 
 import numpy as np
 from ..utils import pd
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QThread, Signal, QMutex
 
 # BrainFlow imports
-from brainflow.board_shim import BrainFlowPresets
+from brainflow.board_shim import BrainFlowPresets, BoardShim, BrainFlowInputParams, BoardIds
 
 # Local imports
 from .connect_device_widget import ConnectDeviceWidget
 from .record_data_widget import RecordDataWidget
 from .view_recording_widget import ViewRecordingWidget
 from .acquisition_plot_widget import AcquisitionPlotWidget
+
+
+class StreamState(Enum):
+    """Stream state enumeration"""
+    IDLE = "idle"
+    RUNNING = "running"
+    DEAD = "dead"
+    RECONNECTING = "reconnecting"
+    ERROR = "error"
+
+
+class BrainFlowStreamWorker(QThread):
+    """
+    Background thread worker for BrainFlow I/O operations.
+    Handles data acquisition, watchdog monitoring, and automatic recovery.
+    """
+    # Signals for communication with main thread
+    data_ready = Signal(object, object, object)  # (df_eeg, df_imu, df_ppg)
+    stream_state_changed = Signal(str)  # state name
+    watchdog_triggered = Signal()  # stream detected as dead
+    recovery_failed = Signal(str)  # error message
+    status_update = Signal(str)  # status message for logging
+    board_recovered = Signal(object)  # new board instance after recovery
+    
+    def __init__(self, board_shim, board_id, serial_number, logger=None):
+        super().__init__()
+        self.board_shim = board_shim
+        self.board_id = board_id
+        self.serial_number = serial_number
+        self.logger = logger or logging.getLogger('MusePy.StreamWorker')
+        
+        # State management
+        self.state = StreamState.IDLE
+        self._state_lock = Lock()
+        
+        # Control flags
+        self._stop_event = Event()
+        self._pause_event = Event()
+        self._pause_event.set()  # Start unpaused
+        
+        # Watchdog tracking
+        self.last_sample_time = None
+        self.last_timestamp = None
+        self.last_sample_index = 0
+        self.watchdog_timeout = 2.0  # 2 seconds
+        self._watchdog_lock = Lock()
+        self.stream_start_time_watchdog = None  # Track when stream actually started receiving data
+        
+        # Stream statistics
+        self.sample_count = 0
+        self.stream_start_time = None
+        self.stream_frequency = 0.0
+        self._stats_lock = Lock()
+        
+        # Recovery parameters
+        self.recovery_attempts = 0
+        self.max_recovery_attempts = 5
+        self.recovery_backoff = 1.0  # Start with 1 second
+        self.max_backoff = 30.0
+        
+        # Data buffer for thread-safe communication
+        self.data_buffer = deque(maxlen=10)
+        self._buffer_lock = Lock()
+        
+        # Logging interval (log stats every 5 seconds)
+        self.last_log_time = None
+        self.log_interval = 5.0
+        
+    def run(self):
+        """Main worker thread loop"""
+        self.logger.info("Stream worker thread started")
+        self.set_state(StreamState.RUNNING)
+        
+        try:
+            while not self._stop_event.is_set():
+                # Check if paused
+                if not self._pause_event.is_set():
+                    time.sleep(0.1)
+                    continue
+                
+                # Main data acquisition loop
+                if self.state == StreamState.RUNNING:
+                    self._acquire_data()
+                elif self.state == StreamState.DEAD:
+                    self._handle_stream_death()
+                elif self.state == StreamState.RECONNECTING:
+                    # Recovery happens in _handle_stream_death
+                    time.sleep(0.5)
+                else:
+                    time.sleep(0.1)
+                    
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.01)  # 10ms
+                
+        except Exception as e:
+            self.logger.error(f"Fatal error in stream worker: {e}", exc_info=True)
+            self.set_state(StreamState.ERROR)
+            self.recovery_failed.emit(str(e))
+        finally:
+            self.logger.info("Stream worker thread stopped")
+            
+    def _acquire_data(self):
+        """Acquire data from BrainFlow board"""
+        try:
+            # Check board data count
+            data_count = 0
+            try:
+                data_count = self.board_shim.get_board_data_count(preset=BrainFlowPresets.DEFAULT_PRESET)
+            except Exception as e:
+                self.logger.warning(f"Error getting board data count: {e}")
+                self._check_watchdog()
+                return
+            
+            # Get EEG data
+            df_eeg, df_imu, df_ppg = None, None, None
+            has_data = False
+            
+            if data_count > 0:
+                try:
+                    # Get EEG data
+                    data = self.board_shim.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
+                    if data.size > 0:
+                        has_data = True
+                        # Process data in main thread context via signal
+                        # For now, store raw data and let main thread process it
+                        df_eeg = data
+                        
+                except Exception as e:
+                    self.logger.warning(f"Error getting EEG data: {e}")
+            
+            # Get IMU data if available
+            try:
+                imu_count = self.board_shim.get_board_data_count(preset=BrainFlowPresets.AUXILIARY_PRESET)
+                if imu_count > 0:
+                    imu_data = self.board_shim.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
+                    if imu_data.size > 0:
+                        df_imu = imu_data
+            except Exception as e:
+                self.logger.debug(f"IMU data not available: {e}")  # IMU data is optional
+            
+            # Get PPG data if available
+            try:
+                ppg_count = self.board_shim.get_board_data_count(preset=BrainFlowPresets.ANCILLARY_PRESET)
+                if ppg_count > 0:
+                    ppg_data = self.board_shim.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
+                    if ppg_data.size > 0:
+                        df_ppg = ppg_data
+            except Exception as e:
+                self.logger.debug(f"PPG data not available: {e}")  # PPG data is optional
+            
+            # Update watchdog if we got data
+            if has_data:
+                self._update_watchdog()
+                
+                # Update statistics
+                with self._stats_lock:
+                    self.sample_count += data_count
+                    if self.stream_start_time is None:
+                        self.stream_start_time = time.time()
+                    else:
+                        elapsed = time.time() - self.stream_start_time
+                        if elapsed > 0:
+                            self.stream_frequency = self.sample_count / elapsed
+                
+                # Emit data to main thread
+                self.data_ready.emit(df_eeg, df_imu, df_ppg)
+            else:
+                # No data received - check watchdog
+                self._check_watchdog()
+            
+            # Periodic logging
+            self._periodic_log(data_count)
+            
+        except Exception as e:
+            self.logger.error(f"Error in _acquire_data: {e}", exc_info=True)
+            self._check_watchdog()
+    
+    def _update_watchdog(self):
+        """Update watchdog timestamp"""
+        with self._watchdog_lock:
+            self.last_sample_time = time.time()
+            # Try to extract timestamp from last sample if possible
+            # For now, just update time
+    
+    def _check_watchdog(self):
+        """Check if stream is dead (no data for watchdog_timeout seconds)"""
+        with self._watchdog_lock:
+            now = time.time()
+            if self.last_sample_time is None:
+                # First check - initialize watchdog start time
+                if self.stream_start_time_watchdog is None:
+                    with self._stats_lock:
+                        if self.stream_start_time is not None:
+                            self.stream_start_time_watchdog = self.stream_start_time
+                        else:
+                            self.stream_start_time_watchdog = now
+                else:
+                    # Check if we've waited too long for first data
+                    elapsed = now - self.stream_start_time_watchdog
+                    if elapsed > self.watchdog_timeout:
+                        # Stream started but no data received
+                        self.logger.warning(f"Watchdog: No data received after {elapsed:.2f}s")
+                        self.set_state(StreamState.DEAD)
+                        self.watchdog_triggered.emit()
+                return
+            
+            elapsed = now - self.last_sample_time
+            if elapsed > self.watchdog_timeout:
+                self.logger.warning(f"Watchdog triggered: No data for {elapsed:.2f}s")
+                self.set_state(StreamState.DEAD)
+                self.watchdog_triggered.emit()
+    
+    def _periodic_log(self, data_count):
+        """Periodically log stream statistics"""
+        now = time.time()
+        if self.last_log_time is None:
+            self.last_log_time = now
+            return
+        
+        if now - self.last_log_time >= self.log_interval:
+            with self._stats_lock:
+                with self._watchdog_lock:
+                    last_sample_str = f"{self.last_sample_time:.3f}" if self.last_sample_time else "None"
+                    time_since_str = f"{(now - self.last_sample_time):.2f}s" if self.last_sample_time else "N/A"
+                    log_msg = (
+                        f"Stream stats - Data count: {data_count}, "
+                        f"Total samples: {self.sample_count}, "
+                        f"Frequency: {self.stream_frequency:.2f} Hz, "
+                        f"Last sample: {last_sample_str}, "
+                        f"Time since last: {time_since_str}"
+                    )
+                    self.logger.info(log_msg)
+                    self.status_update.emit(log_msg)
+            
+            self.last_log_time = now
+    
+    def _handle_stream_death(self):
+        """Handle stream death by attempting recovery"""
+        if self.recovery_attempts >= self.max_recovery_attempts:
+            self.logger.error(f"Max recovery attempts ({self.max_recovery_attempts}) reached")
+            self.set_state(StreamState.ERROR)
+            self.recovery_failed.emit(f"Failed after {self.max_recovery_attempts} recovery attempts")
+            return
+        
+        self.recovery_attempts += 1
+        self.set_state(StreamState.RECONNECTING)
+        
+        backoff_time = min(self.recovery_backoff * (2 ** (self.recovery_attempts - 1)), self.max_backoff)
+        self.logger.info(f"Attempting recovery #{self.recovery_attempts} after {backoff_time:.1f}s backoff")
+        
+        # Wait for backoff
+        if self._stop_event.wait(backoff_time):
+            return  # Stop was requested
+        
+        try:
+            # Attempt recovery
+            self.status_update.emit(f"Recovery attempt {self.recovery_attempts}/{self.max_recovery_attempts}")
+            
+            # Stop stream
+            try:
+                self.board_shim.stop_stream()
+            except Exception as e:
+                self.logger.warning(f"Error stopping stream during recovery: {e}")
+            
+            # Release session
+            try:
+                self.board_shim.release_session()
+            except Exception as e:
+                self.logger.warning(f"Error releasing session during recovery: {e}")
+            
+                # Re-initialize board
+            try:
+                params = BrainFlowInputParams()
+                if self.serial_number:
+                    params.serial_number = self.serial_number
+                
+                # Create new board instance
+                new_board = BoardShim(self.board_id, params)
+                
+                # Prepare session
+                new_board.prepare_session()
+                
+                # Configure board
+                try:
+                    if self.board_id == BoardIds.MUSE_S_BOARD:
+                        new_board.config_board("p61")
+                    elif self.board_id == BoardIds.MUSE_2_BOARD:
+                        new_board.config_board("p50")
+                except Exception as e:
+                    self.logger.warning(f"Error configuring board during recovery: {e}")
+                
+                # Start stream
+                new_board.start_stream()
+                
+                # Update board reference
+                self.board_shim = new_board
+                
+                # Emit signal to update main thread's board reference
+                self.board_recovered.emit(new_board)
+                
+                # Reset recovery state
+                self.recovery_attempts = 0
+                self.recovery_backoff = 1.0
+                
+                # Reset watchdog
+                with self._watchdog_lock:
+                    self.last_sample_time = None
+                    self.stream_start_time_watchdog = None
+                
+                # Reset stats
+                with self._stats_lock:
+                    self.stream_start_time = None
+                    self.sample_count = 0
+                    self.stream_frequency = 0.0
+                
+                self.logger.info("Recovery successful - stream restarted")
+                self.set_state(StreamState.RUNNING)
+                self.status_update.emit("Recovery successful")
+                
+            except Exception as e:
+                self.logger.error(f"Recovery attempt {self.recovery_attempts} failed: {e}", exc_info=True)
+                # Will retry on next iteration
+                
+        except Exception as e:
+            self.logger.error(f"Unexpected error during recovery: {e}", exc_info=True)
+    
+    def set_state(self, state):
+        """Thread-safe state update"""
+        with self._state_lock:
+            old_state = self.state
+            self.state = state
+        if old_state != state:
+            self.logger.debug(f"State changed: {old_state.value} -> {state.value}")
+            self.stream_state_changed.emit(state.value)
+    
+    def get_state(self):
+        """Thread-safe state getter"""
+        with self._state_lock:
+            return self.state
+    
+    def pause(self):
+        """Pause data acquisition"""
+        self._pause_event.clear()
+        self.logger.debug("Stream worker paused")
+    
+    def resume(self):
+        """Resume data acquisition"""
+        self._pause_event.set()
+        self.logger.debug("Stream worker resumed")
+    
+    def stop(self):
+        """Stop the worker thread"""
+        self.logger.info("Stopping stream worker...")
+        self._stop_event.set()
+        self._pause_event.set()  # Resume to allow cleanup
+        
+        # Wait for thread to finish (with timeout)
+        if self.isRunning():
+            self.wait(3000)  # 3 second timeout
+        
+        # Cleanup BrainFlow resources
+        if self.board_shim:
+            try:
+                self.board_shim.stop_stream()
+            except Exception as e:
+                self.logger.warning(f"Error stopping stream in cleanup: {e}")
+            
+            try:
+                self.board_shim.release_session()
+            except Exception as e:
+                self.logger.warning(f"Error releasing session in cleanup: {e}")
+        
+        self.logger.info("Stream worker stopped")
 
 
 class DataCollectionWidget(QWidget):
@@ -42,6 +418,14 @@ class DataCollectionWidget(QWidget):
         self.stream_data = pd.DataFrame()
         self.timestamp_start = None  # Single timestamp reference in seconds
         self.stream_timer = None
+        
+        # Background stream worker
+        self.stream_worker = None
+        self.board_id = None
+        self.serial_number = None
+        
+        # Cleanup flag
+        self._is_closing = False
         
         # CSV file handles for incremental writing
         self.csv_files = {}
@@ -158,6 +542,31 @@ class DataCollectionWidget(QWidget):
             console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
             self.logger.addHandler(console_handler)
             self.logger.error(f"Failed to setup file logging: {e}")
+    
+    def closeEvent(self, event):
+        """Handle widget close event - ensure clean shutdown"""
+        self.cleanup()
+        super().closeEvent(event)
+    
+    def cleanup(self):
+        """Clean shutdown - stop all threads and release resources"""
+        if self._is_closing:
+            return
+        self._is_closing = True
+        
+        self.logger.info("Cleaning up DataCollectionWidget...")
+        
+        # Stop streaming
+        self.stop_streaming()
+        
+        # Close CSV files if still open
+        if self.csv_files:
+            try:
+                self.close_csv_files()
+            except Exception as e:
+                self.logger.error(f"Error closing CSV files during cleanup: {e}")
+        
+        self.logger.info("DataCollectionWidget cleanup complete")
         
     def setup_control_panels(self):
         """Setup control panels in the left panel"""
@@ -205,15 +614,30 @@ class DataCollectionWidget(QWidget):
         self.board = board
         self.is_connected = True
         
+        # Store board connection info for recovery
+        if hasattr(self.connect_device_widget, 'device_combo'):
+            self.board_id = self.connect_device_widget.device_combo.currentData()
+        if hasattr(self.connect_device_widget, 'device_id_combo'):
+            self.serial_number = self.connect_device_widget.device_id_combo.currentData()
+        
         # Enable recording controls
         self.record_data_widget.set_enabled(True)
         self.logger.debug("Recording controls enabled")
+        
+        # Show reconnect button in connect widget
+        if hasattr(self.connect_device_widget, 'reconnect_btn'):
+            self.connect_device_widget.reconnect_btn.setVisible(True)
+            self.connect_device_widget.reconnect_btn.setEnabled(True)
         
         # Don't start streaming automatically - only when recording starts
         
     def on_device_disconnected(self):
         """Handle device disconnection"""
         self.logger.info("Device disconnected")
+        
+        # Stop and cleanup stream worker
+        self.stop_streaming()
+        
         self.board = None
         self.is_connected = False
         
@@ -221,8 +645,10 @@ class DataCollectionWidget(QWidget):
         self.record_data_widget.set_enabled(False)
         self.logger.debug("Recording controls disabled")
         
-        # Stop streaming
-        self.stop_streaming()
+        # Hide reconnect button
+        if hasattr(self.connect_device_widget, 'reconnect_btn'):
+            self.connect_device_widget.reconnect_btn.setVisible(False)
+            self.connect_device_widget.reconnect_btn.setEnabled(False)
         
     def on_recording_started(self):
         """Handle recording start"""
@@ -241,10 +667,22 @@ class DataCollectionWidget(QWidget):
         if self.board and not self.demo_mode:
             try:
                 # Clear the board buffer by getting and discarding all current data
-                # Clear all presets
-                self.board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
-                self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
-                self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
+                # Clear all presets - protect all calls with try/except
+                try:
+                    self.board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
+                except Exception as e:
+                    self.logger.warning(f"Error clearing DEFAULT preset buffer: {e}")
+                
+                try:
+                    self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
+                except Exception as e:
+                    self.logger.warning(f"Error clearing AUXILIARY preset buffer: {e}")
+                
+                try:
+                    self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
+                except Exception as e:
+                    self.logger.warning(f"Error clearing ANCILLARY preset buffer: {e}")
+                
                 self.logger.info("Cleared BrainFlow board buffer for all presets")
             except Exception as e:
                 self.logger.error(f"Error clearing board buffer: {e}", exc_info=True)
@@ -381,22 +819,229 @@ class DataCollectionWidget(QWidget):
     
     def start_streaming(self):
         """Start real-time data streaming"""
-        if self.stream_timer is None:
-            self.stream_timer = QTimer()
-            self.stream_timer.timeout.connect(self.update_stream)
-            # Use 50ms interval (20 Hz) for more stable sampling rate and to catch all data
-            self.stream_timer.start(200)
-            self.logger.debug("Stream timer started (200ms interval)")
+        if self.demo_mode:
+            # Demo mode uses timer-based approach
+            if self.stream_timer is None:
+                self.stream_timer = QTimer()
+                self.stream_timer.timeout.connect(self.update_stream)
+                self.stream_timer.start(200)
+                self.logger.debug("Stream timer started (200ms interval)")
+            return
+        
+        # Real mode: use background worker
+        if self.stream_worker is not None and self.stream_worker.isRunning():
+            self.logger.warning("Stream worker already running")
+            return
+        
+        if not self.board:
+            self.logger.error("Cannot start streaming: board not connected")
+            return
+        
+        # Create and start background worker
+        try:
+            self.stream_worker = BrainFlowStreamWorker(
+                self.board, 
+                self.board_id, 
+                self.serial_number,
+                self.logger
+            )
+            self.stream_worker.data_ready.connect(self.on_stream_data_ready)
+            self.stream_worker.watchdog_triggered.connect(self.on_watchdog_triggered)
+            self.stream_worker.recovery_failed.connect(self.on_recovery_failed)
+            self.stream_worker.status_update.connect(self.on_status_update)
+            self.stream_worker.stream_state_changed.connect(self.on_stream_state_changed)
+            self.stream_worker.board_recovered.connect(self.on_board_recovered)
+            
+            self.stream_worker.start()
+            self.logger.info("Background stream worker started")
+            
+            # Also start UI update timer (faster updates for plotting)
+            if self.stream_timer is None:
+                self.stream_timer = QTimer()
+                self.stream_timer.timeout.connect(self.update_plot_from_buffer)
+                self.stream_timer.start(50)  # 20 Hz for UI updates
+                self.logger.debug("UI update timer started (50ms interval)")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to start stream worker: {e}", exc_info=True)
+            QMessageBox.critical(self, "Streaming Error", f"Failed to start streaming: {str(e)}")
             
     def stop_streaming(self):
         """Stop real-time data streaming"""
+        # Stop background worker
+        if self.stream_worker is not None:
+            self.logger.info("Stopping stream worker...")
+            self.stream_worker.stop()
+            self.stream_worker = None
+            self.logger.info("Stream worker stopped")
+        
+        # Stop UI timer
         if self.stream_timer:
             self.stream_timer.stop()
             self.stream_timer = None
             self.logger.debug("Stream timer stopped")
     
+    def on_stream_data_ready(self, raw_eeg, raw_imu, raw_ppg):
+        """Handle data ready signal from background worker (main thread)"""
+        try:
+            # Process raw data into DataFrames
+            df_eeg = None
+            df_imu = None
+            df_ppg = None
+            
+            if raw_eeg is not None and raw_eeg.size > 0:
+                df_eeg = self.make_dataframe(raw_eeg, BrainFlowPresets.DEFAULT_PRESET)
+                if df_eeg.empty:
+                    return
+            
+            if raw_imu is not None and raw_imu.size > 0:
+                df_imu = self.make_dataframe(raw_imu, BrainFlowPresets.AUXILIARY_PRESET)
+            
+            if raw_ppg is not None and raw_ppg.size > 0:
+                df_ppg = self.make_dataframe(raw_ppg, BrainFlowPresets.ANCILLARY_PRESET)
+            
+            # Process timestamps
+            self._process_timestamps(df_eeg, df_imu, df_ppg)
+            
+            # Write data to CSV files incrementally if recording
+            if self.is_recording:
+                if df_eeg is not None and not df_eeg.empty:
+                    self.write_data_to_csv('eeg', df_eeg)
+                if df_imu is not None and not df_imu.empty:
+                    self.write_data_to_csv('imu', df_imu)
+                if df_ppg is not None and not df_ppg.empty:
+                    self.write_data_to_csv('ppg', df_ppg)
+            
+            # Update stream data for plotting (only EEG for now)
+            if df_eeg is not None and not df_eeg.empty:
+                if self.stream_data.empty:
+                    self.stream_data = df_eeg
+                else:
+                    self.stream_data = pd.concat([self.stream_data, df_eeg], ignore_index=True)
+                    
+        except Exception as e:
+            self.logger.error(f"Error processing stream data: {str(e)}", exc_info=True)
+    
+    def update_plot_from_buffer(self):
+        """Update plot from accumulated stream data (called by UI timer)"""
+        if not self.stream_data.empty:
+            self.acquisition_plot.update_stream_data(self.stream_data)
+    
+    def _process_timestamps(self, df_eeg, df_imu, df_ppg):
+        """Process timestamps and set timestamp_start if needed"""
+        # Set timestamp_start from the earliest timestamp across all data types
+        if self.timestamp_start is None:
+            earliest_timestamp = None
+            
+            # Check EEG timestamps
+            if df_eeg is not None and not df_eeg.empty and 'timestamp' in df_eeg._columns:
+                eeg_timestamps = df_eeg._data['timestamp']
+                if len(eeg_timestamps) > 0:
+                    earliest_timestamp = eeg_timestamps[0]
+            
+            # Check IMU timestamps
+            if df_imu is not None and not df_imu.empty and 'timestamp' in df_imu._columns:
+                imu_timestamps = df_imu._data['timestamp']
+                if len(imu_timestamps) > 0:
+                    if earliest_timestamp is None or imu_timestamps[0] < earliest_timestamp:
+                        earliest_timestamp = imu_timestamps[0]
+            
+            # Check PPG timestamps
+            if df_ppg is not None and not df_ppg.empty and 'timestamp' in df_ppg._columns:
+                ppg_timestamps = df_ppg._data['timestamp']
+                if len(ppg_timestamps) > 0:
+                    if earliest_timestamp is None or ppg_timestamps[0] < earliest_timestamp:
+                        earliest_timestamp = ppg_timestamps[0]
+            
+            if earliest_timestamp is not None:
+                self.timestamp_start = earliest_timestamp
+                self.logger.info(f"Timestamp start set to: {self.timestamp_start} (from earliest timestamp across all data types)")
+            else:
+                self.logger.warning("Could not determine timestamp_start - no valid timestamps found")
+        
+        # Calculate time_rel for all data types using the same timestamp_start
+        if self.timestamp_start is not None:
+            if df_eeg is not None and not df_eeg.empty and 'timestamp' in df_eeg._columns:
+                df_eeg['time_rel'] = df_eeg._data['timestamp'] - self.timestamp_start
+            
+            if df_imu is not None and not df_imu.empty and 'timestamp' in df_imu._columns:
+                df_imu['time_rel'] = df_imu._data['timestamp'] - self.timestamp_start
+            
+            if df_ppg is not None and not df_ppg.empty and 'timestamp' in df_ppg._columns:
+                df_ppg['time_rel'] = df_ppg._data['timestamp'] - self.timestamp_start
+    
+    def on_watchdog_triggered(self):
+        """Handle watchdog trigger - stream is dead"""
+        self.logger.warning("Watchdog triggered - stream appears dead")
+        # Worker will handle recovery automatically
+        # Optionally show user notification
+        if self.is_recording:
+            QMessageBox.warning(
+                self, 
+                "Stream Interrupted",
+                "Data stream has stopped. Attempting automatic recovery..."
+            )
+    
+    def on_recovery_failed(self, error_msg):
+        """Handle recovery failure"""
+        self.logger.error(f"Recovery failed: {error_msg}")
+        QMessageBox.critical(
+            self,
+            "Stream Recovery Failed",
+            f"Failed to recover data stream after multiple attempts.\n\n{error_msg}\n\n"
+            "Please disconnect and reconnect the device manually."
+        )
+        # Optionally trigger manual reconnect
+        if hasattr(self, 'connect_device_widget'):
+            self.connect_device_widget.connect_btn.setChecked(False)
+    
+    def on_status_update(self, message):
+        """Handle status update messages from worker"""
+        self.logger.debug(f"Stream worker status: {message}")
+    
+    def on_stream_state_changed(self, state_name):
+        """Handle stream state changes"""
+        self.logger.info(f"Stream state changed to: {state_name}")
+    
+    def on_board_recovered(self, new_board):
+        """Handle board recovery - update board reference"""
+        self.logger.info("Board recovered - updating reference")
+        self.board = new_board
+        # Also update in connect widget if it has a reference
+        if hasattr(self, 'connect_device_widget') and self.connect_device_widget:
+            self.connect_device_widget.board = new_board
+    
+    def manual_reconnect(self):
+        """Manually trigger stream reconnection"""
+        if self.demo_mode:
+            self.logger.info("Manual reconnect not applicable in demo mode")
+            return
+        
+        if not self.is_connected:
+            self.logger.warning("Cannot reconnect: device not connected")
+            QMessageBox.warning(
+                self,
+                "Not Connected",
+                "Device is not connected. Please connect the device first."
+            )
+            return
+        
+        self.logger.info("Manual reconnect triggered")
+        
+        # If worker is running, trigger recovery
+        if self.stream_worker is not None and self.stream_worker.isRunning():
+            # Force stream death state to trigger recovery
+            self.stream_worker.set_state(StreamState.DEAD)
+            # Reset recovery attempts to allow fresh attempt
+            self.stream_worker.recovery_attempts = 0
+        else:
+            # Restart streaming
+            self.stop_streaming()
+            time.sleep(0.5)  # Brief pause
+            self.start_streaming()
+    
     def update_stream(self):
-        """Update streaming data"""
+        """Update streaming data (for demo mode or fallback)"""
         if not self.is_connected:
             return
             
@@ -420,111 +1065,22 @@ class DataCollectionWidget(QWidget):
                 df_imu = None
                 df_ppg = None
                 
+                # Write data to CSV files incrementally if recording
+                if self.is_recording:
+                    self.write_data_to_csv('eeg', df_eeg)
+                
+                # Update stream data for plotting
+                if self.stream_data.empty:
+                    self.stream_data = df_eeg
+                else:
+                    self.stream_data = pd.concat([self.stream_data, df_eeg], ignore_index=True)
+                    
+                # Update plot
+                self.acquisition_plot.update_stream_data(self.stream_data)
             else:
-                # Get real data from board
-                if not self.board:
-                    self.logger.warning("Board not available during streaming")
-                    return
-                
-                # Get EEG data
-                data = self.board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
-                if data.size == 0:
-                    return  # No new data available
-
-                self.logger.debug(f"EEG: Received {data.size} values, shape: {data.shape}")
-                df_eeg = self.make_dataframe(data, BrainFlowPresets.DEFAULT_PRESET)
-                if df_eeg.empty:
-                    self.logger.debug("EEG: DataFrame is empty after creation")
-                    return
-                
-                self.logger.debug(f"EEG: DataFrame created with {len(df_eeg)} rows, {len(df_eeg._columns)} columns")
-                
-                # Get IMU data
-                df_imu = None
-                try:
-                    imu_data = self.board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
-                    if imu_data.size > 0:
-                        self.logger.debug(f"IMU: Received {imu_data.size} values, shape: {imu_data.shape}")
-                        df_imu = self.make_dataframe(imu_data, BrainFlowPresets.AUXILIARY_PRESET)
-                        if not df_imu.empty:
-                            self.logger.debug(f"IMU: DataFrame created with {len(df_imu)} rows, {len(df_imu._columns)} columns")
-                    else:
-                        self.logger.debug("IMU: No data available")
-                except Exception as e:
-                    self.logger.debug(f"IMU: Error getting data: {e}")
-                
-                # Get PPG data
-                df_ppg = None
-                try:
-                    ppg_data = self.board.get_board_data(preset=BrainFlowPresets.ANCILLARY_PRESET)
-                    if ppg_data.size > 0:
-                        self.logger.debug(f"PPG: Received {ppg_data.size} values, shape: {ppg_data.shape}")
-                        df_ppg = self.make_dataframe(ppg_data, BrainFlowPresets.ANCILLARY_PRESET)
-                        if not df_ppg.empty:
-                            self.logger.debug(f"PPG: DataFrame created with {len(df_ppg)} rows, {len(df_ppg._columns)} columns")
-                    else:
-                        self.logger.debug("PPG: No data available")
-                except Exception as e:
-                    self.logger.debug(f"PPG: Error getting data: {e}")
-                
-                # Set timestamp_start from the earliest timestamp across all data types
-                # This ensures no negative time_rel values
-                if self.timestamp_start is None:
-                    earliest_timestamp = None
-                    
-                    # Check EEG timestamps
-                    if not df_eeg.empty and 'timestamp' in df_eeg._columns:
-                        eeg_timestamps = df_eeg._data['timestamp']
-                        if len(eeg_timestamps) > 0:
-                            earliest_timestamp = eeg_timestamps[0]
-                    
-                    # Check IMU timestamps
-                    if df_imu is not None and not df_imu.empty and 'timestamp' in df_imu._columns:
-                        imu_timestamps = df_imu._data['timestamp']
-                        if len(imu_timestamps) > 0:
-                            if earliest_timestamp is None or imu_timestamps[0] < earliest_timestamp:
-                                earliest_timestamp = imu_timestamps[0]
-                    
-                    # Check PPG timestamps
-                    if df_ppg is not None and not df_ppg.empty and 'timestamp' in df_ppg._columns:
-                        ppg_timestamps = df_ppg._data['timestamp']
-                        if len(ppg_timestamps) > 0:
-                            if earliest_timestamp is None or ppg_timestamps[0] < earliest_timestamp:
-                                earliest_timestamp = ppg_timestamps[0]
-                    
-                    if earliest_timestamp is not None:
-                        self.timestamp_start = earliest_timestamp
-                        self.logger.info(f"Timestamp start set to: {self.timestamp_start} (from earliest timestamp across all data types)")
-                    else:
-                        self.logger.warning("Could not determine timestamp_start - no valid timestamps found")
-                
-                # Calculate time_rel for all data types using the same timestamp_start
-                if self.timestamp_start is not None:
-                    if not df_eeg.empty and 'timestamp' in df_eeg._columns:
-                        df_eeg['time_rel'] = df_eeg._data['timestamp'] - self.timestamp_start
-                    
-                    if df_imu is not None and not df_imu.empty and 'timestamp' in df_imu._columns:
-                        df_imu['time_rel'] = df_imu._data['timestamp'] - self.timestamp_start
-                    
-                    if df_ppg is not None and not df_ppg.empty and 'timestamp' in df_ppg._columns:
-                        df_ppg['time_rel'] = df_ppg._data['timestamp'] - self.timestamp_start
-            
-            # Write data to CSV files incrementally if recording
-            if self.is_recording:
-                self.write_data_to_csv('eeg', df_eeg)
-                if df_imu is not None:
-                    self.write_data_to_csv('imu', df_imu)
-                if df_ppg is not None:
-                    self.write_data_to_csv('ppg', df_ppg)
-            
-            # Update stream data for plotting (only EEG for now)
-            if self.stream_data.empty:
-                self.stream_data = df_eeg
-            else:
-                self.stream_data = pd.concat([self.stream_data, df_eeg], ignore_index=True)
-                
-            # Update plot
-            self.acquisition_plot.update_stream_data(self.stream_data)
+                # Real mode should use background worker
+                # This is a fallback if worker is not available
+                self.logger.warning("update_stream called in real mode - should use background worker")
             
         except Exception as e:
             self.logger.error(f"Streaming error: {str(e)}", exc_info=True)
